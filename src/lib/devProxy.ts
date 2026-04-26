@@ -16,7 +16,14 @@ export function normalizeBaseUrl(baseUrl: string): string {
 
   try {
     const url = new URL(input)
-    const pathname = url.pathname === '/' ? '' : url.pathname.replace(/\/+$/, '')
+    const pathSegments = url.pathname.split('/').filter(Boolean)
+    const v1Index = pathSegments.indexOf('v1')
+    const normalizedSegments = v1Index >= 0
+      ? pathSegments.slice(0, v1Index + 1)
+      : pathSegments.length
+        ? [...pathSegments, 'v1']
+        : []
+    const pathname = normalizedSegments.length ? `/${normalizedSegments.join('/')}` : ''
     return `${url.origin}${pathname}`
   } catch {
     return trimmed.replace(/\/+$/, '')
@@ -45,7 +52,10 @@ export function normalizeDevProxyConfig(input: unknown): DevProxyConfig | null {
 
 export function buildApiUrl(baseUrl: string, path: string, proxyConfig?: DevProxyConfig | null): string {
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl)
-  const apiPath = ['v1', path.replace(/^\/+/, '')].join('/')
+  const endpointPath = path.replace(/^\/+/, '')
+  const apiPath = normalizedBaseUrl.endsWith('/v1')
+    ? endpointPath
+    : ['v1', endpointPath].join('/')
   const useProxy =
     Boolean(proxyConfig?.enabled) &&
     Boolean(proxyConfig?.target) &&

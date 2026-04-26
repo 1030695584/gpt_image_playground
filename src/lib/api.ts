@@ -72,24 +72,25 @@ function createResponsesImageTool(params: TaskParams, isEdit: boolean): Record<s
     action: isEdit ? 'edit' : 'generate',
     size: params.size,
     quality: params.quality,
-    format: params.output_format,
+    output_format: params.output_format,
   }
 
   if (params.output_format !== 'png' && params.output_compression != null) {
-    tool.compression = params.output_compression
+    tool.output_compression = params.output_compression
   }
 
   return tool
 }
 
 function createResponsesInput(prompt: string, inputImageDataUrls: string[]): unknown {
-  if (!inputImageDataUrls.length) return prompt
+  const text = `Use the following text as the complete prompt. Do not rewrite it:\n${prompt}`
+  if (!inputImageDataUrls.length) return text
 
   return [
     {
       role: 'user',
       content: [
-        { type: 'input_text', text: prompt.trim() || 'Edit the provided image.' },
+        { type: 'input_text', text },
         ...inputImageDataUrls.map((dataUrl) => ({
           type: 'input_image',
           image_url: dataUrl,
@@ -97,46 +98,6 @@ function createResponsesInput(prompt: string, inputImageDataUrls: string[]): unk
       ],
     },
   ]
-}
-
-function parseResponsesImageDataUrls(payload: ResponsesApiResponse, fallbackMime: string): string[] {
-  const output = payload.output
-  if (!Array.isArray(output) || !output.length) {
-    throw new Error('接口未返回图片数据')
-  }
-
-  const images: string[] = []
-
-  for (const item of output) {
-    if (item?.type !== 'image_generation_call') continue
-
-    const result = item.result
-    if (typeof result === 'string' && result.trim()) {
-      images.push(normalizeBase64Image(result, fallbackMime))
-      continue
-    }
-
-    if (result && typeof result === 'object') {
-      const b64 =
-        typeof result.b64_json === 'string'
-          ? result.b64_json
-          : typeof result.image === 'string'
-            ? result.image
-            : typeof result.data === 'string'
-              ? result.data
-              : null
-
-      if (b64) {
-        images.push(normalizeBase64Image(b64, fallbackMime))
-      }
-    }
-  }
-
-  if (!images.length) {
-    throw new Error('接口未返回可用图片数据')
-  }
-
-  return images
 }
 
 export interface CallApiOptions {
@@ -150,6 +111,68 @@ export interface CallApiOptions {
 export interface CallApiResult {
   /** base64 data URL 列表 */
   images: string[]
+  /** API 返回的实际生效参数 */
+  actualParams?: Partial<TaskParams>
+  /** 每张图片对应的实际生效参数 */
+  actualParamsList?: Array<Partial<TaskParams> | undefined>
+  /** 每张图片对应的 API 改写提示词 */
+  revisedPrompts?: Array<string | undefined>
+}
+
+function parseResponsesImageResults(payload: ResponsesApiResponse, fallbackMime: string): Array<{
+  image: string
+  actualParams?: Partial<TaskParams>
+  revisedPrompt?: string
+}> {
+  const output = payload.output
+  if (!Array.isArray(output) || !output.length) {
+    throw new Error('接口未返回图片数据')
+  }
+
+  const results: Array<{ image: string; actualParams?: Partial<TaskParams>; revisedPrompt?: string }> = []
+
+  for (const item of output) {
+    if (item?.type !== 'image_generation_call') continue
+
+    const result = item.result
+    if (typeof result === 'string' && result.trim()) {
+      results.push({
+        image: normalizeBase64Image(result, fallbackMime),
+        actualParams: mergeActualParams(pickActualParams(item)),
+        revisedPrompt: typeof item.revised_prompt === 'string' ? item.revised_prompt : undefined,
+      })
+    }
+  }
+
+  if (!results.length) {
+    throw new Error('接口未返回可用图片数据')
+  }
+
+  return results
+}
+
+function pickActualParams(source: unknown): Partial<TaskParams> {
+  if (!source || typeof source !== 'object') return {}
+  const record = source as Record<string, unknown>
+  const actualParams: Partial<TaskParams> = {}
+
+  if (typeof record.size === 'string') actualParams.size = record.size
+  if (record.quality === 'auto' || record.quality === 'low' || record.quality === 'medium' || record.quality === 'high') {
+    actualParams.quality = record.quality
+  }
+  if (record.output_format === 'png' || record.output_format === 'jpeg' || record.output_format === 'webp') {
+    actualParams.output_format = record.output_format
+  }
+  if (typeof record.output_compression === 'number') actualParams.output_compression = record.output_compression
+  if (record.moderation === 'auto' || record.moderation === 'low') actualParams.moderation = record.moderation
+  if (typeof record.n === 'number') actualParams.n = record.n
+
+  return actualParams
+}
+
+function mergeActualParams(...sources: Array<Partial<TaskParams>>): Partial<TaskParams> | undefined {
+  const merged = Object.assign({}, ...sources.filter((source) => Object.keys(source).length))
+  return Object.keys(merged).length ? merged : undefined
 }
 
 export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult> {
@@ -239,15 +262,18 @@ async function callImagesApi(opts: CallApiOptions): Promise<CallApiResult> {
     }
 
     const images: string[] = []
+    const revisedPrompts: Array<string | undefined> = []
     for (const item of data) {
       const b64 = item.b64_json
       if (b64) {
         images.push(normalizeBase64Image(b64, mime))
+        revisedPrompts.push(typeof item.revised_prompt === 'string' ? item.revised_prompt : undefined)
         continue
       }
 
       if (isHttpUrl(item.url)) {
         images.push(await fetchImageUrlAsDataUrl(item.url, mime, controller.signal))
+        revisedPrompts.push(typeof item.revised_prompt === 'string' ? item.revised_prompt : undefined)
       }
     }
 
@@ -255,51 +281,91 @@ async function callImagesApi(opts: CallApiOptions): Promise<CallApiResult> {
       throw new Error('接口未返回可用图片数据')
     }
 
-    return { images }
+    const actualParams = mergeActualParams(pickActualParams(payload))
+    return {
+      images,
+      actualParams,
+      actualParamsList: images.map(() => actualParams),
+      revisedPrompts,
+    }
   } finally {
     clearTimeout(timeoutId)
   }
 }
 
 async function callResponsesImageApi(opts: CallApiOptions): Promise<CallApiResult> {
+  const n = opts.params.n > 0 ? opts.params.n : 1
+  if (n === 1) {
+    return callResponsesImageApiSingle(opts)
+  }
+
+  const promises = Array.from({ length: n }).map(() => callResponsesImageApiSingle(opts))
+  const results = await Promise.allSettled(promises)
+  
+  const successfulResults = results
+    .filter((r): r is PromiseFulfilledResult<CallApiResult> => r.status === 'fulfilled')
+    .map((r) => r.value)
+
+  if (successfulResults.length === 0) {
+    const firstError = results.find((r): r is PromiseRejectedResult => r.status === 'rejected')
+    if (firstError) throw firstError.reason
+    throw new Error('所有并发请求均失败')
+  }
+
+  const images = successfulResults.flatMap((r) => r.images)
+  const actualParamsList = successfulResults.flatMap((r) =>
+    r.actualParamsList?.length ? r.actualParamsList : r.images.map(() => r.actualParams),
+  )
+  const revisedPrompts = successfulResults.flatMap((r) =>
+    r.revisedPrompts?.length ? r.revisedPrompts : r.images.map(() => undefined),
+  )
+  const actualParams = mergeActualParams(
+    successfulResults[0]?.actualParams ?? {},
+    images.length === opts.params.n ? { n: opts.params.n } : { n: images.length },
+  )
+
+  return { images, actualParams, actualParamsList, revisedPrompts }
+}
+
+async function callResponsesImageApiSingle(opts: CallApiOptions): Promise<CallApiResult> {
   const { settings, prompt, params, inputImageDataUrls } = opts
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
   const requestHeaders = createRequestHeaders(settings)
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), settings.timeout * 1000)
-  const requestCount = Number.isFinite(params.n) ? Math.max(1, Math.floor(params.n)) : 1
 
   try {
-    const images: string[] = []
-
-    for (let i = 0; i < requestCount; i++) {
-      const body = {
-        model: settings.model,
-        input: createResponsesInput(prompt, inputImageDataUrls),
-        tools: [createResponsesImageTool(params, inputImageDataUrls.length > 0)],
-      }
-
-      const response = await fetch(buildApiUrl(settings.baseUrl, 'responses', proxyConfig), {
-        method: 'POST',
-        headers: {
-          ...requestHeaders,
-          'Content-Type': 'application/json',
-        },
-        cache: 'no-store',
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      })
-
-      if (!response.ok) {
-        throw new Error(await getApiErrorMessage(response))
-      }
-
-      const payload = await response.json() as ResponsesApiResponse
-      images.push(...parseResponsesImageDataUrls(payload, mime))
+    const body = {
+      model: settings.model,
+      input: createResponsesInput(prompt, inputImageDataUrls),
+      tools: [createResponsesImageTool(params, inputImageDataUrls.length > 0)],
+      tool_choice: 'required',
     }
 
-    return { images }
+    const response = await fetch(buildApiUrl(settings.baseUrl, 'responses', proxyConfig), {
+      method: 'POST',
+      headers: {
+        ...requestHeaders,
+        'Content-Type': 'application/json',
+      },
+      cache: 'no-store',
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      throw new Error(await getApiErrorMessage(response))
+    }
+
+    const payload = await response.json() as ResponsesApiResponse
+    const imageResults = parseResponsesImageResults(payload, mime)
+    return {
+      images: imageResults.map((result) => result.image),
+      actualParams: imageResults[0]?.actualParams,
+      actualParamsList: imageResults.map((result) => result.actualParams),
+      revisedPrompts: imageResults.map((result) => result.revisedPrompt),
+    }
   } finally {
     clearTimeout(timeoutId)
   }

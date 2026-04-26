@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { normalizeBaseUrl } from '../lib/api'
 import { useStore, exportData, importData, clearAllData } from '../store'
-import { DEFAULT_SETTINGS, type AppSettings } from '../types'
+import { DEFAULT_IMAGES_MODEL, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, type AppSettings } from '../types'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import Select from './Select'
 
 export default function SettingsModal() {
   const showSettings = useStore((s) => s.showSettings)
@@ -15,6 +16,9 @@ export default function SettingsModal() {
   const [timeoutInput, setTimeoutInput] = useState(String(settings.timeout))
   const [showApiKey, setShowApiKey] = useState(false)
 
+  const getDefaultModelForMode = (apiMode: AppSettings['apiMode']) =>
+    apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL
+
   useEffect(() => {
     if (showSettings) {
       setDraft(settings)
@@ -24,12 +28,13 @@ export default function SettingsModal() {
 
   const commitSettings = (nextDraft: AppSettings) => {
     const apiMode = nextDraft.apiMode === 'responses' ? 'responses' : DEFAULT_SETTINGS.apiMode
+    const defaultModel = getDefaultModelForMode(apiMode)
     const normalizedDraft = {
       ...nextDraft,
       apiMode,
       baseUrl: normalizeBaseUrl(nextDraft.baseUrl.trim() || DEFAULT_SETTINGS.baseUrl),
       apiKey: nextDraft.apiKey,
-      model: nextDraft.model.trim() || DEFAULT_SETTINGS.model,
+      model: nextDraft.model.trim() || defaultModel,
       timeout: Number(nextDraft.timeout) || DEFAULT_SETTINGS.timeout,
     }
     setDraft(normalizedDraft)
@@ -160,32 +165,48 @@ export default function SettingsModal() {
 
               <label className="block">
                 <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">API 接口</span>
-                <select
+                <Select
                   value={draft.apiMode ?? DEFAULT_SETTINGS.apiMode}
-                  onChange={(e) => {
-                    const nextDraft = { ...draft, apiMode: e.target.value as AppSettings['apiMode'] }
+                  onChange={(value) => {
+                    const apiMode = value as AppSettings['apiMode']
+                    const nextModel =
+                      draft.model === DEFAULT_IMAGES_MODEL || draft.model === DEFAULT_RESPONSES_MODEL
+                        ? getDefaultModelForMode(apiMode)
+                        : draft.model
+                    const nextDraft = { ...draft, apiMode, model: nextModel }
                     setDraft(nextDraft)
                     commitSettings(nextDraft)
                   }}
+                  options={[
+                    { label: 'Images API (/v1/images)', value: 'images' },
+                    { label: 'Responses API (/v1/responses)', value: 'responses' },
+                  ]}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
-                >
-                  <option value="images">Images API (/v1/images)</option>
-                  <option value="responses">Responses API (/v1/responses)</option>
-                </select>
+                />
+                <div className="mt-1 text-[10px] text-gray-400 dark:text-gray-500">
+                  如果你在使用源于 Codex CLI 的 API，请选择 Responses API。
+                </div>
               </label>
 
               <label className="block">
                 <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                  模型 ID{(draft.apiMode ?? DEFAULT_SETTINGS.apiMode) === 'responses' ? '（Responses 文本模型）' : ''}
+                  模型 ID
                 </span>
                 <input
                   value={draft.model}
                   onChange={(e) => setDraft((prev) => ({ ...prev, model: e.target.value }))}
                   onBlur={(e) => commitSettings({ ...draft, model: e.target.value })}
                   type="text"
-                  placeholder={(draft.apiMode ?? DEFAULT_SETTINGS.apiMode) === 'responses' ? '支持 image_generation 的文本模型' : DEFAULT_SETTINGS.model}
+                  placeholder={getDefaultModelForMode(draft.apiMode ?? DEFAULT_SETTINGS.apiMode)}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                 />
+                <div className="mt-1 text-[10px] text-gray-400 dark:text-gray-500">
+                  {(draft.apiMode ?? DEFAULT_SETTINGS.apiMode) === 'responses' ? (
+                    <>Responses API 需要使用支持 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">image_generation</code> 工具的文本模型，例如 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_RESPONSES_MODEL}</code>。</>
+                  ) : (
+                    <>Images API 需要使用 GPT Image 模型，例如 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_IMAGES_MODEL}</code>。</>
+                  )}
+                </div>
               </label>
 
               <label className="block">

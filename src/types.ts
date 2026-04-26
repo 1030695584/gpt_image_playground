@@ -10,12 +10,14 @@ export interface AppSettings {
   apiMode: ApiMode
 }
 
-const DEFAULT_BASE_URL = import.meta.env.VITE_DEFAULT_API_URL?.trim() || 'https://api.openai.com'
+const DEFAULT_BASE_URL = import.meta.env.VITE_DEFAULT_API_URL?.trim() || 'https://api.openai.com/v1'
+export const DEFAULT_IMAGES_MODEL = 'gpt-image-2'
+export const DEFAULT_RESPONSES_MODEL = 'gpt-5.5'
 
 export const DEFAULT_SETTINGS: AppSettings = {
   baseUrl: DEFAULT_BASE_URL,
   apiKey: '',
-  model: 'gpt-image-2',
+  model: DEFAULT_IMAGES_MODEL,
   timeout: 300,
   apiMode: 'images',
 }
@@ -57,6 +59,12 @@ export interface TaskRecord {
   id: string
   prompt: string
   params: TaskParams
+  /** API 返回的实际生效参数，用于标记与请求值不一致的情况 */
+  actualParams?: Partial<TaskParams>
+  /** 输出图片对应的实际生效参数，key 为 outputImages 中的图片 id */
+  actualParamsByImage?: Record<string, Partial<TaskParams>>
+  /** 输出图片对应的 API 改写提示词，key 为 outputImages 中的图片 id */
+  revisedPromptByImage?: Record<string, string>
   /** 输入图片的 image store id 列表 */
   inputImageIds: string[]
   /** 输出图片的 image store id 列表 */
@@ -67,6 +75,8 @@ export interface TaskRecord {
   finishedAt: number | null
   /** 总耗时毫秒 */
   elapsed: number | null
+  /** 是否收藏 */
+  isFavorite?: boolean
 }
 
 // ===== IndexedDB 存储的图片 =====
@@ -98,10 +108,22 @@ export interface ImageGenerationRequest {
 export interface ImageResponseItem {
   b64_json?: string
   url?: string
+  revised_prompt?: string
+  size?: string
+  quality?: string
+  output_format?: string
+  output_compression?: number
+  moderation?: string
 }
 
 export interface ImageApiResponse {
   data: ImageResponseItem[]
+  size?: string
+  quality?: string
+  output_format?: string
+  output_compression?: number
+  moderation?: string
+  n?: number
 }
 
 export interface ResponsesOutputItem {
@@ -111,10 +133,25 @@ export interface ResponsesOutputItem {
     image?: string
     data?: string
   }
+  size?: string
+  quality?: string
+  output_format?: string
+  output_compression?: number
+  moderation?: string
+  revised_prompt?: string
 }
 
 export interface ResponsesApiResponse {
   output?: ResponsesOutputItem[]
+  tools?: Array<{
+    type?: string
+    size?: string
+    quality?: string
+    output_format?: string
+    output_compression?: number
+    moderation?: string
+    n?: number
+  }>
 }
 
 // ===== 导出数据 =====

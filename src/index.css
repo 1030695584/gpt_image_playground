@@ -8,11 +8,26 @@
 :root {
   --font-ui-sans: 'HarmonyOS Sans SC', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-mono: 'Maple Mono', 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
+  scrollbar-gutter: stable;
+}
+
+html {
+  overflow-y: scroll;
 }
 
 * {
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;
+}
+
+img {
+  -webkit-user-drag: none;
+}
+
+body.drag-selecting,
+body.drag-selecting * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
 }
 
 @media (prefers-color-scheme: dark) {

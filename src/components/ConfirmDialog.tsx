@@ -9,8 +9,12 @@ export default function ConfirmDialog() {
 
   if (!confirmDialog) return null
 
+  const isDestructive = confirmDialog.title.includes('删除') || confirmDialog.title.includes('清空')
+  const confirmText = confirmDialog.confirmText ?? (isDestructive ? '确认删除' : '确认')
+
   return (
     <div
+      data-no-drag-select
       className="fixed inset-0 z-[70] flex items-center justify-center p-4"
       onClick={() => setConfirmDialog(null)}
     >
@@ -35,9 +39,13 @@ export default function ConfirmDialog() {
               confirmDialog.action()
               setConfirmDialog(null)
             }}
-            className="flex-1 py-2 rounded-lg bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition"
+            className={`flex-1 py-2 rounded-lg text-white text-sm font-medium transition ${
+              isDestructive
+                ? 'bg-red-500 hover:bg-red-600'
+                : 'bg-blue-500 hover:bg-blue-600'
+            }`}
           >
-            确认删除
+            {confirmText}
           </button>
         </div>
       </div>

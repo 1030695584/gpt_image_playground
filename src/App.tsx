@@ -44,6 +44,17 @@ export default function App() {
     initStore()
   }, [setSettings])
 
+  useEffect(() => {
+    const preventPageImageDrag = (e: DragEvent) => {
+      if ((e.target as HTMLElement | null)?.closest('img')) {
+        e.preventDefault()
+      }
+    }
+
+    document.addEventListener('dragstart', preventPageImageDrag)
+    return () => document.removeEventListener('dragstart', preventPageImageDrag)
+  }, [])
+
   return (
     <>
       <Header />

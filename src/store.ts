@@ -73,6 +73,14 @@ interface AppState {
   setSearchQuery: (q: string) => void
   filterStatus: 'all' | 'running' | 'done' | 'error'
   setFilterStatus: (status: AppState['filterStatus']) => void
+  filterFavorite: boolean
+  setFilterFavorite: (f: boolean) => void
+
+  // 多选
+  selectedTaskIds: string[]
+  setSelectedTaskIds: (ids: string[] | ((prev: string[]) => string[])) => void
+  toggleTaskSelection: (id: string, force?: boolean) => void
+  clearSelection: () => void
 
   // UI
   detailTaskId: string | null
@@ -91,6 +99,7 @@ interface AppState {
   confirmDialog: {
     title: string
     message: string
+    confirmText?: string
     action: () => void
   } | null
   setConfirmDialog: (d: AppState['confirmDialog']) => void
@@ -145,6 +154,25 @@ export const useStore = create<AppState>()(
       setSearchQuery: (searchQuery) => set({ searchQuery }),
       filterStatus: 'all',
       setFilterStatus: (filterStatus) => set({ filterStatus }),
+      filterFavorite: false,
+      setFilterFavorite: (filterFavorite) => set({ filterFavorite }),
+
+      // Selection
+      selectedTaskIds: [],
+      setSelectedTaskIds: (updater) => set((s) => ({
+        selectedTaskIds: typeof updater === 'function' ? updater(s.selectedTaskIds) : updater
+      })),
+      toggleTaskSelection: (id, force) => set((s) => {
+        const isSelected = s.selectedTaskIds.includes(id)
+        const shouldSelect = force !== undefined ? force : !isSelected
+        if (shouldSelect === isSelected) return s
+        return {
+          selectedTaskIds: shouldSelect
+            ? [...s.selectedTaskIds, id]
+            : s.selectedTaskIds.filter((x) => x !== id)
+        }
+      }),
+      clearSelection: () => set({ selectedTaskIds: [] }),
 
       // UI
       detailTaskId: null,
@@ -220,8 +248,8 @@ export async function submitTask() {
     return
   }
 
-  if (!prompt.trim() && !inputImages.length) {
-    showToast('请输入提示词或添加参考图', 'error')
+  if (!prompt.trim()) {
+    showToast('请输入提示词', 'error')
     return
   }
 
@@ -287,10 +315,23 @@ async function executeTask(taskId: string) {
       imageCache.set(imgId, dataUrl)
       outputIds.push(imgId)
     }
+    const actualParamsByImage = result.actualParamsList?.reduce<Record<string, Partial<TaskParams>>>((acc, params, index) => {
+      const imgId = outputIds[index]
+      if (imgId && params && Object.keys(params).length > 0) acc[imgId] = params
+      return acc
+    }, {})
+    const revisedPromptByImage = result.revisedPrompts?.reduce<Record<string, string>>((acc, revisedPrompt, index) => {
+      const imgId = outputIds[index]
+      if (imgId && revisedPrompt && revisedPrompt.trim()) acc[imgId] = revisedPrompt
+      return acc
+    }, {})
 
     // 更新任务
     updateTaskInStore(taskId, {
       outputImages: outputIds,
+      actualParams: { ...result.actualParams, n: outputIds.length },
+      actualParamsByImage: actualParamsByImage && Object.keys(actualParamsByImage).length > 0 ? actualParamsByImage : undefined,
+      revisedPromptByImage: revisedPromptByImage && Object.keys(revisedPromptByImage).length > 0 ? revisedPromptByImage : undefined,
       status: 'done',
       finishedAt: Date.now(),
       elapsed: Date.now() - task.createdAt,
@@ -313,7 +354,7 @@ async function executeTask(taskId: string) {
   }
 }
 
-function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
+export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
   const { tasks, setTasks } = useStore.getState()
   const updated = tasks.map((t) =>
     t.id === taskId ? { ...t, ...patch } : t,
@@ -356,6 +397,54 @@ export async function editOutputs(task: TaskRecord) {
     }
   }
   showToast(`已添加 ${added} 张输出图到输入`, 'success')
+}
+
+/** 删除多条任务 */
+export async function removeMultipleTasks(taskIds: string[]) {
+  const { tasks, setTasks, inputImages, showToast, clearSelection, selectedTaskIds } = useStore.getState()
+  
+  if (!taskIds.length) return
+
+  const toDelete = new Set(taskIds)
+  const remaining = tasks.filter(t => !toDelete.has(t.id))
+
+  // 收集所有被删除任务的关联图片
+  const deletedImageIds = new Set<string>()
+  for (const t of tasks) {
+    if (toDelete.has(t.id)) {
+      for (const id of t.inputImageIds || []) deletedImageIds.add(id)
+      for (const id of t.outputImages || []) deletedImageIds.add(id)
+    }
+  }
+
+  setTasks(remaining)
+  for (const id of taskIds) {
+    await dbDeleteTask(id)
+  }
+
+  // 找出其他任务仍引用的图片
+  const stillUsed = new Set<string>()
+  for (const t of remaining) {
+    for (const id of t.inputImageIds || []) stillUsed.add(id)
+    for (const id of t.outputImages || []) stillUsed.add(id)
+  }
+  for (const img of inputImages) stillUsed.add(img.id)
+
+  // 删除孤立图片
+  for (const imgId of deletedImageIds) {
+    if (!stillUsed.has(imgId)) {
+      await deleteImage(imgId)
+      imageCache.delete(imgId)
+    }
+  }
+
+  // 如果删除的任务在选中列表中，则移除
+  const newSelection = selectedTaskIds.filter(id => !toDelete.has(id))
+  if (newSelection.length !== selectedTaskIds.length) {
+    useStore.getState().setSelectedTaskIds(newSelection)
+  }
+
+  showToast(`已删除 ${taskIds.length} 条记录`, 'success')
 }
 
 /** 删除单条任务 */
