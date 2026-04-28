@@ -64,6 +64,7 @@ interface AppState {
   removeInputImage: (idx: number) => void
   clearInputImages: () => void
   setInputImages: (imgs: InputImage[]) => void
+  moveInputImage: (fromIdx: number, toIdx: number) => void
   maskDraft: MaskDraft | null
   setMaskDraft: (draft: MaskDraft | null) => void
   clearMaskDraft: () => void
@@ -172,6 +173,13 @@ export const useStore = create<AppState>()(
             inputImages: imgs,
             ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null } : {}),
           }
+        }),
+      moveInputImage: (fromIdx, toIdx) =>
+        set((s) => {
+          const images = [...s.inputImages]
+          const [moved] = images.splice(fromIdx, 1)
+          images.splice(toIdx, 0, moved)
+          return { inputImages: images }
         }),
       maskDraft: null,
       setMaskDraft: (maskDraft) => set({ maskDraft }),

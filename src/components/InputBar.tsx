@@ -107,6 +107,7 @@ export default function InputBar() {
   const maskDraft = useStore((s) => s.maskDraft)
   const clearMaskDraft = useStore((s) => s.clearMaskDraft)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
+  const moveInputImage = useStore((s) => s.moveInputImage)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -123,6 +124,8 @@ export default function InputBar() {
   const [mobileCollapsed, setMobileCollapsed] = useState(false)
   const [showSizePicker, setShowSizePicker] = useState(false)
   const [maskPreviewUrl, setMaskPreviewUrl] = useState('')
+  const [dragIndex, setDragIndex] = useState<number | null>(null)
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
   const handleRef = useRef<HTMLDivElement>(null)
   const dragTouchRef = useRef({ startY: 0, moved: false })
   const compressionHintTimerRef = useRef<number | null>(null)
@@ -487,23 +490,71 @@ export default function InputBar() {
 
   const selectClass = 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm'
 
-  const renderImageThumb = (img: (typeof inputImages)[number]) => {
-    const originalIndex = inputImages.findIndex((i) => i.id === img.id)
+  const renderImageThumb = (img: (typeof inputImages)[number], idx: number) => {
     const isMaskTarget = maskDraft?.targetImageId === img.id
     const canEdit = !maskTargetImage || isMaskTarget
     const displaySrc = isMaskTarget && maskPreviewUrl ? maskPreviewUrl : img.dataUrl
+    const isDragging = dragIndex === idx
+    const isLast = idx === inputImages.length - 1
+    const showDropBefore = dragOverIndex === idx && dragIndex !== idx
+    const showDropAfter = dragOverIndex === inputImages.length && isLast && dragIndex !== idx
+
+    const handleDragStart = (e: React.DragEvent) => {
+      setDragIndex(idx)
+      e.dataTransfer.effectAllowed = 'move'
+      e.dataTransfer.setData('text/plain', String(idx))
+    }
+
+    const handleDragOver = (e: React.DragEvent) => {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      if (dragIndex === null || dragIndex === idx) return
+      const rect = e.currentTarget.getBoundingClientRect()
+      const midX = rect.left + rect.width / 2
+      setDragOverIndex(e.clientX < midX ? idx : idx + 1)
+    }
+
+    const handleDrop = (e: React.DragEvent) => {
+      e.preventDefault()
+      if (dragIndex !== null && dragIndex !== idx) {
+        const rect = e.currentTarget.getBoundingClientRect()
+        const midX = rect.left + rect.width / 2
+        moveInputImage(dragIndex, e.clientX < midX ? idx : idx + 1)
+      }
+      setDragIndex(null)
+      setDragOverIndex(null)
+    }
+
+    const handleDragEnd = () => {
+      setDragIndex(null)
+      setDragOverIndex(null)
+    }
 
     return (
-      <div key={img.id} className="relative group inline-block">
+      <div
+        key={img.id}
+        className={`relative group inline-block shrink-0 transition-opacity ${isDragging ? 'opacity-40' : ''}`}
+        draggable
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        onDragEnd={handleDragEnd}
+      >
         <div 
-          className={`relative w-[52px] h-[52px] rounded-xl overflow-hidden border shadow-sm cursor-pointer ${
-            isMaskTarget ? 'border-blue-500 border-2' : 'border-gray-200 dark:border-white/[0.08]'
+          className={`relative w-[52px] h-[52px] rounded-xl overflow-hidden shadow-sm cursor-grab active:cursor-grabbing ${
+            showDropBefore
+              ? 'border-l-2 border-blue-500'
+              : showDropAfter
+                ? 'border-r-2 border-blue-500'
+                : isMaskTarget
+                  ? 'border-2 border-blue-500'
+                  : 'border border-gray-200 dark:border-white/[0.08]'
           }`}
           onClick={() => setLightboxImageId(img.id, inputImages.map((i) => i.id))}
         >
           <img
             src={displaySrc}
-            className="w-full h-full object-cover hover:opacity-90 transition-opacity"
+            className="w-full h-full object-cover hover:opacity-90 transition-opacity pointer-events-none"
             alt=""
           />
           {isMaskTarget && (
@@ -530,7 +581,7 @@ export default function InputBar() {
           className="absolute -top-2 -right-2 w-[22px] h-[22px] rounded-full bg-red-500 text-white flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-red-600 z-30"
           onClick={(e) => {
             e.stopPropagation()
-            if (originalIndex >= 0) removeInputImage(originalIndex)
+            removeInputImage(idx)
           }}
         >
           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -566,7 +617,7 @@ export default function InputBar() {
     return (
       <div ref={imagesRef}>
         <div className="grid grid-cols-[repeat(auto-fill,52px)] justify-between gap-x-2 gap-y-3 mb-3">
-          {inputImages.map((img) => renderImageThumb(img))}
+          {inputImages.map((img, idx) => renderImageThumb(img, idx))}
           {renderClearAllButton()}
         </div>
       </div>
