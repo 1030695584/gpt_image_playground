@@ -75,167 +75,104 @@
 
 ## 🚀 部署与使用
 
-支持多种部署与使用方式，推荐使用 Vercel 一键部署。
+支持多种部署与开发方式。无论使用哪种方式，你都可以预设默认的 API 节点。
 
 <details>
 <summary><strong>▲ 方式一：Vercel 一键部署 (推荐)</strong></summary>
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FCookSleep%2Fgpt_image_playground&project-name=gpt-image-playground&repository-name=gpt-image-playground)
 
-点击上方按钮后，按 Vercel 页面提示导入仓库即可。项目已包含 `vercel.json`，Vercel 会自动执行 `npm install`、`npm run build`，并将 `dist/` 作为静态输出目录。
+点击上方按钮导入仓库即可，Vercel 会自动执行构建并部署静态文件。
 
-如需预置默认 API 节点，可在 Vercel 项目的 **Settings → Environment Variables** 中添加：
+**配置默认 API URL**：在 Vercel 项目的 **Settings → Environment Variables** 中添加 `VITE_DEFAULT_API_URL`（如 `https://api.openai.com/v1`），然后重新部署即可生效。
 
-```bash
-VITE_DEFAULT_API_URL=https://api.openai.com/v1
-```
+**配置自动更新**：
 
-部署完成后，打开 Vercel 分配的域名，在页面右上角设置中填入 API Key 即可使用。
+本项目已在 `vercel.json` 中关闭了默认的自动部署。若需在同步 GitHub 上游代码后自动更新 Vercel 部署：
 
-**更新说明：**
+1. 在 Vercel 项目设置 **Settings -> Git** 的 **Deploy Hooks** 中创建一个名为 `Release` 的 Hook（Branch 填 `main`）并复制生成的 URL。
+2. 在你 Fork 的 GitHub 仓库设置 **Settings -> Secrets and variables -> Actions** 中，新建 Secret `VERCEL_DEPLOY_HOOK`，填入刚才的 URL。
 
-本仓库已在 `vercel.json` 中关闭了 Vercel 的默认自动部署（防止日常提交和别人 PR 产生部署报错噪音）。
-
-**如果你希望在同步了新的代码后自动让 Vercel 部署最新版**，请进行以下简单配置：
-
-1. 打开你的 Vercel 项目设置：**Settings** -> **Git**。
-2. 找到 **Deploy Hooks** 区域，起个名字（如 `Release`），Branch 填 `main`，然后点击 **Create Hook**。
-3. 复制生成的专属 URL（形如 `https://api.vercel.com/v1/integrations/deploy/...`）。
-4. 打开你 Fork 的 GitHub 仓库设置：**Settings** -> **Secrets and variables** -> **Actions**。
-5. 点击 **New repository secret**，名称填 `VERCEL_DEPLOY_HOOK`，值粘贴你刚才复制的 URL，然后保存。
-
-配置完成后，当你每次在 GitHub 页面点击 **Sync fork** 同步了上游最新的版本 Tag 时，仓库里的 GitHub Action 就会自动帮你触发 Vercel 进行构建和部署。
-
-*如果你不配置这个 Secret，项目将不会自动部署。你需要每次在 GitHub 页面点击 **Sync fork** 后，手动在 Vercel 项目的 **Deployments** 页面点击 Redeploy 来更新。*
+此后，每次在 GitHub 点击 **Sync fork** 同步上游，都会自动触发 Vercel 构建部署最新版。
 
 </details>
 
 <details>
 <summary><strong>🐳 方式二：Docker 部署</strong></summary>
 
-项目已将镜像发布至 GitHub Container Registry。你可以通过环境变量 `API_URL` 注入默认的 API 节点，也可以通过 `HOST`、`PORT` 指定容器内 nginx 的监听地址，默认值为 `0.0.0.0:80`。
+官方镜像已发布至 GitHub Container Registry。Docker 部署支持在运行时注入默认配置。
 
-**使用 Docker CLI：**
+**环境变量说明：**
+
+- `DEFAULT_API_URL`：设置页面上默认显示的 API 地址。
+- `API_PROXY_URL`：配置内置代理实际转发到的目标 API 地址（仅开启代理时有效）。
+- `ENABLE_API_PROXY`：设为 `true` 开启容器内置 Nginx 同源代理，用于解决浏览器跨域（CORS）限制。开启后，浏览器将请求同源的 `/api-proxy/`，再由 Nginx 转发至 `API_PROXY_URL`。
+- `HOST` / `PORT`：指定容器内 Nginx 监听的地址和端口（默认 `0.0.0.0:80`）。
+
+> ⚠️ **安全警告**：开启 API 代理后，任何人都能将你的服务器作为代理来请求目标 API。建议仅在有访问控制（如 IP 白名单）或本地网络中开启。
+
+> 💡 **兼容迁移**：旧版本中的 `API_URL` 已拆分为 `DEFAULT_API_URL` 和 `API_PROXY_URL`。容器启动时会自动将遗留的 `API_URL` 作为两个新变量的兜底值，实现无缝兼容。建议更新配置文件，逐步迁移至新变量。
+
+**1. Docker CLI 示例**
 
 ```bash
 docker run -d -p 8080:80 \
-  -e API_URL=https://api.openai.com/v1 \
+  -e DEFAULT_API_URL=https://api.openai.com/v1 \
+  -e ENABLE_API_PROXY=true \
+  -e API_PROXY_URL=https://api.openai.com/v1 \
   ghcr.io/cooksleep/gpt_image_playground:latest
 ```
 
-使用 host 网络并监听宿主机 `28080` 端口：
+*(注：使用 host 网络时加 `--network host`，修改容器监听端口使用 `-e PORT=28080`)*
 
-```bash
-docker run -d --network host \
-  -e HOST=0.0.0.0 \
-  -e PORT=28080 \
-  -e API_URL=https://api.openai.com/v1 \
-  ghcr.io/cooksleep/gpt_image_playground:latest
-```
-
-**使用 Docker Compose：**
+**2. Docker Compose 示例**
 
 ```yaml
 services:
   gpt-image-playground:
     image: ghcr.io/cooksleep/gpt_image_playground:latest
     environment:
-      - API_URL=https://api.openai.com/v1
+      - DEFAULT_API_URL=https://api.openai.com/v1
     ports:
       - "8080:80"
     restart: unless-stopped
 ```
 
-浏览器访问 `http://localhost:8080`，在页面右上角设置中填入 API Key 即可使用。
-
-如果你的 API 节点没有放开浏览器跨域，可以用环境变量 `ENABLE_API_PROXY=true` 开启容器内 Nginx 代理。开启后，设置面板才会展示 **API 代理** 开关；用户启用该开关后，浏览器会请求同源的 `/api-proxy/`，由容器内 Nginx 转发到部署端配置的 `API_URL`。
-
-⚠️ **安全警告**：开启 `ENABLE_API_PROXY=true` 后，任何人都能将你的服务器作为代理来请求目标 API。虽然请求本身仍需携带有效的 API Key 才能成功，但这可能会消耗你的服务器带宽。如果目标 API 是内网服务或基于 IP 白名单免密访问，则存在被未经授权调用的风险。建议仅在本地开发或有访问控制（如 IP 白名单、前置认证机制等）的环境中开启此功能。
-
-如果使用 bridge 网络并修改了容器内 `PORT`，需要同步调整端口映射，例如 `PORT=28080` 时使用 `"8080:28080"`。使用 host 网络时不要配置 `ports`。
-
-*(注：官方镜像同时提供带版本号的标签，如 `0.1.11` 或 `0.1`)*
-
 **更新说明：**
 
-- 使用 `latest` 标签时，重新拉取镜像并重启容器即可更新到最新发布版本。
-- 如果希望固定版本，建议使用明确版本号标签，例如 `ghcr.io/cooksleep/gpt_image_playground:0.2.3`。
-- Docker Compose 更新示例：
-
-```bash
-docker compose pull
-docker compose up -d
-```
+使用 `latest` 标签时，重新拉取镜像并重启即可更新（如 `docker compose pull && docker compose up -d`）。若需固定版本可使用官方提供的版本号标签（如 `0.2.x`）。
 
 </details>
 
 <details>
-<summary><strong>💻 方式三：本地开发与自行构建</strong></summary>
+<summary><strong>💻 方式三：本地开发与静态构建</strong></summary>
 
-1. **环境准备 (可选)**
-   你可以在项目根目录新建 `.env.local` 文件，配置构建时的默认 API URL：
-   ```bash
-   VITE_DEFAULT_API_URL=https://api.openai.com/v1
-   ```
+**1. 环境准备与启动**
 
-2. **安装依赖与启动开发服务器**
-   ```bash
-   npm install
-   npm run dev
-   ```
-   随后浏览器访问 `http://localhost:5173`。
+你可以在项目根目录新建 `.env.local` 文件配置默认 API URL（如 `VITE_DEFAULT_API_URL=https://api.openai.com/v1`）。然后安装依赖并启动：
 
-3. **本地开发跨域代理（可选）**
-   如果你的图片接口没有放开浏览器跨域，前端直接请求接口时可能会被浏览器的 CORS 策略拦截。这个可选代理用于本地开发调试：开启页面设置中的 **API 代理** 后，浏览器先请求同源的 Vite 开发服务器，再由 Vite 开发服务器转发到真实接口。
+```bash
+npm install
+npm run dev
+```
 
-   请求链路如下：
+**2. 本地开发跨域代理 (可选)**
 
-   ```text
-   浏览器页面 http://localhost:5173
-     -> 同源请求 http://localhost:5173/api-proxy/v1/images/generations
-     -> Vite 开发服务器代理转发
-     -> 真实接口 http://127.0.0.1:3000/v1/images/generations
-   ```
+如果在本地开发时遇到浏览器的 CORS 限制，可开启本地代理转发：
 
-   选择 Responses API 时，同一代理配置会将请求改写为 `/api-proxy/v1/responses`。
+```bash
+cp dev-proxy.config.example.json dev-proxy.config.json
+```
 
-   这样浏览器看到的是同源请求，实际跨域请求发生在 Vite 开发服务器这一侧，从而绕开浏览器 CORS 限制。
+修改 `dev-proxy.config.json`，将 `target` 设置为真实的图片接口地址。重启开发服务器后，在页面设置中开启 **API 代理** 即可（请求将被转发如 `http://localhost:5173/api-proxy/... -> target/...`）。此功能仅在 `npm run dev` 阶段生效，不会影响打包产物。
 
-   注意：这个开发代理只在 `npm run dev` 启动的 Vite 开发服务器中生效。它不会打包进静态产物，也不会在 Vercel、GitHub Pages 或普通 Nginx 静态部署中生效。Docker 镜像内置了 Nginx 代理，可以通过环境变量 `ENABLE_API_PROXY=true` 开启（默认关闭）。
+**3. 构建静态产物**
 
-   先复制示例配置：
-   ```bash
-   cp dev-proxy.config.example.json dev-proxy.config.json
-   ```
-   然后修改项目根目录下的本地 `dev-proxy.config.json`：
-   ```json
-   {
-     "enabled": true,
-     "prefix": "/api-proxy",
-     "target": "http://127.0.0.1:3000",
-     "changeOrigin": true,
-     "secure": false
-   }
-   ```
-   配置含义：
+```bash
+npm run build
+```
 
-   - `enabled`：是否启用本地开发代理。
-   - `prefix`：前端同源请求使用的代理路径前缀。
-   - `target`：真实图片接口地址，也就是 Vite 开发服务器要转发到的后端。
-   - `changeOrigin`：转发时是否把请求头中的 `Host` 改成 `target` 的主机名，通常建议保持 `true`。
-   - `secure`：当 `target` 是 HTTPS 时是否校验证书；本地自签名证书可设为 `false`。
-
-   修改配置后需要重新启动开发服务器，并在页面设置中的 `API URL` 填入与 `target` 相同的地址，然后开启 **API 代理**。开启后，请求会改写为 `prefix` 开头的同源地址，例如 `/api-proxy/v1/images/generations` 或 `/api-proxy/v1/responses`。
-
-   > 如果 `target` 或填入的 `API URL` 已经包含了 `/v1` 路径，则同源请求的路径将不再重复拼接 `/v1`，例如会直接变为 `/api-proxy/responses`
-
-   如果需要在非 Docker 的线上部署中使用代理，请使用 Vercel Function、Cloudflare Worker、Nginx 反向代理或自建后端等服务端方案。
-
-4. **构建静态产物**
-   ```bash
-   npm run build
-   ```
-   构建输出的文件会存放在 `dist/` 目录下，你可以将其部署到任何静态文件服务器（如 Nginx、Vercel、Netlify 等）。
+构建输出的文件位于 `dist/` 目录下，可将其部署至任何静态文件服务器（如普通 Nginx、GitHub Pages、Netlify 等）。
 
 </details>
 
@@ -243,30 +180,31 @@ docker compose up -d
 
 ## 🛠️ API 配置与 URL 传参
 
-点击页面右上角的 **设置 (⚙️)**，可以配置模型与密钥。
+点击页面右上角的 **设置 (⚙️)**，可以配置模型、密钥与其他参数。
 
-- **Images API**：调用 `/v1/images/generations` 和 `/v1/images/edits`，模型需要填写 GPT Image 模型，例如 `gpt-image-2`。
-- **Responses API**：调用 `/v1/responses` 并使用 `image_generation` 工具，模型需要填写支持该工具的文本模型，例如 `gpt-5.5`。请求文本会始终加入简短的不改写要求，避免模型重写提示词，偏离原意。
-- **API 代理**：开启后，浏览器会请求同源的 `/api-proxy/` 路径，再由当前后端转发到真实 API，用于绕开浏览器 CORS 限制。代理目标由部署端配置决定，例如 Docker 中的 `API_URL` 或本地开发的 `dev-proxy.config.json`。
-- **Codex CLI 模式**：如果你在使用源于 Codex CLI 的 API，可以在 `API URL` 右侧开启该模式。开启后应用不会向任何接口发送 `quality` 参数，界面中的质量选项也会固定为 `auto`；使用 Images API 时，还会在提示词文本开头加入简短的不改写要求。
-- Codex CLI 模式下，Images API 的图片数量会通过并发发起多个单图请求实现；Responses API 原本也通过并发请求实现多图生成。
-- 如果检测到接口返回的提示词被改写，或缺少官方 API 通常会返回的部分信息，应用会提示是否为当前 `API URL + API Key` 组合开启 Codex CLI 模式；取消后，同一组合不再重复询问。
+- **双接口模式**：支持 `Images API` (需填写 GPT Image 模型，如 `gpt-image-2`) 和 `Responses API` (需填写支持该工具的文本模型，如 `gpt-5.5`)。
+- **API 代理**：开启后，浏览器将请求同源的 `/api-proxy/` 路径，交由当前部署环境（Docker 或 本地开发）代理转发至真实 API，以绕开浏览器 CORS 限制。
+- **Codex CLI 模式**：如果你在使用源于 Codex CLI 的 API，可以在 `API URL` 右侧开启该模式。开启后会禁用不支持的 `quality` 参数，Images API 的多图生成也将改为并发单图请求。此外，提示词文本开头会加入简短的防改写指令，防止模型偏离原意。（注：Responses API 无论是否开启此模式，都会默认加入防改写指令）。
+- **智能诊断提示**：当应用检测到接口返回的提示词被强制改写，或缺少官方 API 常规返回的参数时，会主动提示你是否针对当前配置组合开启 Codex CLI 模式。
 
-应用支持通过 URL 查询参数快速填充配置，非常适合书签或分享给他人使用：
+### URL 传参快速填充
+
+应用支持通过 URL 查询参数快速填入配置，非常适合创建书签或集成分享：
+
 - `?apiUrl=https://你的代理地址.com`
 - `?apiKey=sk-xxxx`
-- `?apiMode=images` 或 `?apiMode=responses`，未传时默认使用 `images`
-- `?codexCli=true` 或 `?codexCli=false`，未传时默认关闭，仅 `true` 会开启 Codex CLI 模式
+- `?apiMode=images` 或 `?apiMode=responses`（未传时默认为 `images`）
+- `?codexCli=true`（强制开启 Codex CLI 模式）
 
-例如：
-- 接入 New API 聊天应用：
-  ```text
-  https://gpt-image-playground.cooksleep.dev?apiUrl={address}&apiKey={key}
-  ```
+例如，集成到 New API 的聊天系统：
 
-  ```text
-  https://cooksleep.github.io/gpt_image_playground?apiUrl={address}&apiKey={key}
-  ```
+```text
+https://gpt-image-playground.cooksleep.dev?apiUrl={address}&apiKey={key}
+```
+
+```text
+https://cooksleep.github.io/gpt_image_playground?apiUrl={address}&apiKey={key}
+```
 
 ---
 
