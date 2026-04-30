@@ -21,6 +21,8 @@ env:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    env:
+      VERCEL_DEPLOY_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
     steps:
       - name: Check upstream diff
         id: compare
@@ -49,13 +51,11 @@ jobs:
             -f branch="${FORK_BRANCH}"
 
       - name: Trigger Vercel deploy hook
-        if: steps.compare.outputs.needs_sync == 'true' && secrets.VERCEL_DEPLOY_HOOK != ''
-        env:
-          VERCEL_DEPLOY_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        if: steps.compare.outputs.needs_sync == 'true' && env.VERCEL_DEPLOY_HOOK != ''
         run: |
           curl -fsS -X POST "$VERCEL_DEPLOY_HOOK"
 
       - name: Skip deploy hook when missing
-        if: steps.compare.outputs.needs_sync == 'true' && secrets.VERCEL_DEPLOY_HOOK == ''
+        if: steps.compare.outputs.needs_sync == 'true' && env.VERCEL_DEPLOY_HOOK == ''
         run: |
           echo "VERCEL_DEPLOY_HOOK secret is not set. Upstream sync completed, but Vercel deploy was not triggered."
