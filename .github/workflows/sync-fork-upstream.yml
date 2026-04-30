@@ -1,0 +1,61 @@
+name: Sync Fork With Upstream
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-fork-with-upstream
+  cancel-in-progress: true
+
+env:
+  UPSTREAM_OWNER: CookSleep
+  UPSTREAM_REPO: gpt_image_playground
+  UPSTREAM_BRANCH: main
+  FORK_BRANCH: main
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check upstream diff
+        id: compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          response="$(gh api repos/${{ github.repository }}/compare/${FORK_BRANCH}...${UPSTREAM_OWNER}:${UPSTREAM_BRANCH})"
+          status="$(printf '%s' "$response" | jq -r '.status')"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+          if [ "$status" = "identical" ]; then
+            echo "needs_sync=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "needs_sync=true" >> "$GITHUB_OUTPUT"
+
+      - name: Merge upstream into fork
+        if: steps.compare.outputs.needs_sync == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            --method POST \
+            repos/${{ github.repository }}/merge-upstream \
+            -f branch="${FORK_BRANCH}"
+
+      - name: Trigger Vercel deploy hook
+        if: steps.compare.outputs.needs_sync == 'true' && secrets.VERCEL_DEPLOY_HOOK != ''
+        env:
+          VERCEL_DEPLOY_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          curl -fsS -X POST "$VERCEL_DEPLOY_HOOK"
+
+      - name: Skip deploy hook when missing
+        if: steps.compare.outputs.needs_sync == 'true' && secrets.VERCEL_DEPLOY_HOOK == ''
+        run: |
+          echo "VERCEL_DEPLOY_HOOK secret is not set. Upstream sync completed, but Vercel deploy was not triggered."
