@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 
 interface HelpModalProps {
   onClose: () => void
@@ -18,7 +19,9 @@ function useIsMobile() {
 
 export default function HelpModal({ onClose }: HelpModalProps) {
   const isMobile = useIsMobile()
+  const modalRef = useRef<HTMLDivElement>(null)
   useCloseOnEscape(true, onClose)
+  usePreventBackgroundScroll(true, modalRef)
 
   return createPortal(
     <div
@@ -28,6 +31,7 @@ export default function HelpModal({ onClose }: HelpModalProps) {
     >
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-overlay-in" />
       <div
+        ref={modalRef}
         className="relative z-10 w-full max-w-md rounded-3xl border border-white/50 bg-white/95 p-5 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10 flex flex-col max-h-[85vh] custom-scrollbar"
         onClick={(e) => e.stopPropagation()}
       >
@@ -53,7 +57,7 @@ export default function HelpModal({ onClose }: HelpModalProps) {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto mb-6 text-sm text-gray-600 dark:text-gray-300 space-y-6 custom-scrollbar pr-2">
+        <div className="flex-1 overflow-y-auto overscroll-contain mb-6 text-sm text-gray-600 dark:text-gray-300 space-y-6 custom-scrollbar pr-2">
           {isMobile ? (
             <>
               <section>

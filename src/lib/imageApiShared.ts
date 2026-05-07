@@ -17,6 +17,7 @@ export interface CallApiOptions {
   inputImageDataUrls: string[]
   maskDataUrl?: string
   onFalRequestEnqueued?: (request: { requestId: string; endpoint: string }) => void
+  onCustomTaskEnqueued?: (task: { taskId: string }) => void
 }
 
 export interface CallApiResult {

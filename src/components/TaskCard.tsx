@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import type { TaskRecord } from '../types'
-import { useStore, getCachedImage, ensureImageCached, updateTaskInStore, retryTask } from '../store'
+import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, retryTask } from '../store'
 import { formatImageRatio } from '../lib/size'
 import { ParamValue } from '../lib/paramDisplay'
 
@@ -30,6 +30,7 @@ export default function TaskCard({
   const [swipeStartedSelected, setSwipeStartedSelected] = useState(false)
   const [swipeActionActive, setSwipeActionActive] = useState(false)
   const toggleTaskSelection = useStore((s) => s.toggleTaskSelection)
+  const settings = useStore((s) => s.settings)
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const swipeResetTimerRef = useRef<number | null>(null)
   const suppressClickUntilRef = useRef(0)
@@ -103,54 +104,50 @@ export default function TaskCard({
 
   // 定时更新运行中任务的计时
   useEffect(() => {
-    if (task.status !== 'running' && !(task.status === 'error' && task.falRecoverable)) return
+    if (task.status !== 'running' && !(task.status === 'error' && (task.falRecoverable || task.customRecoverable))) return
     const id = setInterval(() => setNow(Date.now()), 1000)
     setNow(Date.now())
     return () => clearInterval(id)
-  }, [task.falRecoverable, task.status])
+  }, [task.customRecoverable, task.falRecoverable, task.status])
 
   // 加载缩略图
   useEffect(() => {
     setCoverRatio('')
     setCoverSize('')
-
-    if (task.outputImages?.[0]) {
-      const cached = getCachedImage(task.outputImages[0])
-      if (cached) {
-        setThumbSrc(cached)
-      } else {
-        ensureImageCached(task.outputImages[0]).then((url) => {
-          if (url) setThumbSrc(url)
-        })
-      }
-    }
-  }, [task.outputImages])
-
-  useEffect(() => {
-    if (!thumbSrc) return
+    setThumbSrc('')
 
     let cancelled = false
-    const image = new Image()
-    image.onload = () => {
-      if (!cancelled && image.naturalWidth > 0 && image.naturalHeight > 0) {
-        setCoverRatio(formatImageRatio(image.naturalWidth, image.naturalHeight))
-        setCoverSize(`${image.naturalWidth}×${image.naturalHeight}`)
+    const imageId = task.outputImages?.[0]
+    let unsubscribe: (() => void) | undefined
+
+    const applyThumbnail = (thumbnail: { dataUrl: string; width?: number; height?: number }) => {
+      if (cancelled) return
+      setThumbSrc(thumbnail.dataUrl)
+      if (thumbnail.width && thumbnail.height) {
+        setCoverRatio(formatImageRatio(thumbnail.width, thumbnail.height))
+        setCoverSize(`${thumbnail.width}×${thumbnail.height}`)
       }
     }
-    image.src = thumbSrc
-    if (image.complete && image.naturalWidth > 0 && image.naturalHeight > 0) {
-      setCoverRatio(formatImageRatio(image.naturalWidth, image.naturalHeight))
-      setCoverSize(`${image.naturalWidth}×${image.naturalHeight}`)
+
+    if (imageId) {
+      unsubscribe = subscribeImageThumbnail(imageId, applyThumbnail)
+      ensureImageThumbnailCached(imageId).then((thumbnail) => {
+        if (cancelled || !thumbnail) return
+        applyThumbnail(thumbnail)
+      }).catch(() => {
+        if (!cancelled) setThumbSrc('')
+      })
     }
 
     return () => {
       cancelled = true
+      unsubscribe?.()
     }
-  }, [thumbSrc])
+  }, [task.outputImages])
 
   const duration = (() => {
     let seconds: number
-    if (task.status === 'running' || task.falRecoverable) {
+    if (task.status === 'running' || task.falRecoverable || task.customRecoverable) {
       seconds = Math.floor((now - task.createdAt) / 1000)
     } else if (task.elapsed != null) {
       seconds = Math.floor(task.elapsed / 1000)
@@ -161,13 +158,11 @@ export default function TaskCard({
     const ss = String(seconds % 60).padStart(2, '0')
     return `${mm}:${ss}`
   })()
-  const aggregateActualParams = task.outputImages?.length
-    ? { ...task.actualParams, n: task.outputImages.length }
-    : task.actualParams
   const isSwipeReady = Math.abs(swipeOffset) >= 40
   const showSwipeAction = isSwipeReady || swipeActionActive
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
-  const showRunningTimer = task.status === 'running' || isFalReconnecting
+  const isCustomReconnecting = task.status === 'error' && task.customRecoverable
+  const showRunningTimer = task.status === 'running' || isFalReconnecting || isCustomReconnecting
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
       ? 'bg-gray-500 dark:bg-gray-600'
@@ -298,6 +293,7 @@ export default function TaskCard({
             <>
               <img
                 src={thumbSrc}
+                data-image-id={task.outputImages[0]}
                 className="saveable-image w-full h-full object-cover"
                 loading="lazy"
                 alt=""
@@ -359,7 +355,7 @@ export default function TaskCard({
               <ParamValue task={task} paramKey="quality" className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" />
               <ParamValue task={task} paramKey="size" className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" />
               <ParamValue task={task} paramKey="output_format" className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" />
-              <ParamValue task={task} paramKey="n" className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" actualParams={aggregateActualParams} />
+              <ParamValue task={task} paramKey="n" className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" />
               {task.maskImageId && (
                 <span className="text-xs px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 flex-shrink-0">
                   mask
@@ -368,14 +364,14 @@ export default function TaskCard({
               </div>
             {/* 操作按钮 */}
             <div
-              className="flex gap-1 justify-end flex-shrink-0"
+              className="flex justify-between items-center w-full flex-shrink-0 mt-0.5"
               onClick={(e) => e.stopPropagation()}
             >
-              {task.status === 'error' && !isFalReconnecting && (
+              {((task.status === 'error' && !isFalReconnecting) || settings.alwaysShowRetryButton) && (
                 <button
                   onClick={() => retryTask(task)}
                   className="p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition"
-                  title="重试失败任务"
+                  title="重试任务"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />

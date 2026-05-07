@@ -46,7 +46,7 @@ async function createFalRequestInput(opts: CallApiOptions): Promise<Record<strin
   const isEdit = opts.inputImageDataUrls.length > 0
   const input: Record<string, unknown> = {
     prompt: opts.prompt,
-    image_size: await mapFalImageSize(opts.params.size),
+    image_size: isEdit && opts.params.size === 'auto' ? 'auto' : await mapFalImageSize(opts.params.size),
     quality: mapFalQuality(opts.params.quality),
     num_images: Math.min(4, Math.max(1, opts.params.n || 1)),
     output_format: opts.params.output_format,
@@ -78,29 +78,47 @@ function readFalImageValue(value: unknown, fallbackMime: string): string | null 
   return null
 }
 
-async function parseFalImages(payload: FalApiResponse, fallbackMime: string, signal?: AbortSignal): Promise<string[]> {
+function readFalImageSize(value: unknown): Partial<TaskParams> | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  const width = typeof record.width === 'number' ? record.width : null
+  const height = typeof record.height === 'number' ? record.height : null
+  if (!width || !height || !Number.isFinite(width) || !Number.isFinite(height)) return undefined
+  return { size: `${Math.round(width)}x${Math.round(height)}` }
+}
+
+async function parseFalImageResults(payload: FalApiResponse, fallbackMime: string, signal?: AbortSignal): Promise<Array<{
+  image: string
+  actualParams?: Partial<TaskParams>
+}>> {
   const candidates: unknown[] = []
   if (Array.isArray(payload.images)) candidates.push(...payload.images)
   if (payload.image) candidates.push(payload.image)
   if (payload.url) candidates.push(payload.url)
 
-  const images: string[] = []
+  const results: Array<{ image: string; actualParams?: Partial<TaskParams> }> = []
   for (const candidate of candidates) {
     const value = readFalImageValue(candidate, fallbackMime)
     if (!value) continue
-    images.push(isHttpUrl(value) ? await fetchImageUrlAsDataUrl(value, fallbackMime, signal) : value)
+    results.push({
+      image: isHttpUrl(value) ? await fetchImageUrlAsDataUrl(value, fallbackMime, signal) : value,
+      actualParams: readFalImageSize(candidate),
+    })
   }
 
-  if (!images.length) throw new Error('fal.ai 未返回可用图片数据')
-  return images
+  if (!results.length) throw new Error('fal.ai 未返回可用图片数据')
+  return results
 }
 
 async function parseFalResult(payload: FalApiResponse, params: TaskParams, signal?: AbortSignal): Promise<CallApiResult> {
   const mime = MIME_MAP[params.output_format] || 'image/png'
-  const images = await parseFalImages(payload, mime, signal)
+  const imageResults = await parseFalImageResults(payload, mime, signal)
+  const actualParams = mergeActualParams(imageResults[0]?.actualParams)
   return {
-    images,
-    revisedPrompts: images.map(() => undefined),
+    images: imageResults.map((result) => result.image),
+    actualParams,
+    actualParamsList: imageResults.map((result) => result.actualParams),
+    revisedPrompts: imageResults.map(() => undefined),
   }
 }
 
@@ -129,11 +147,6 @@ export function getFalErrorMessage(err: unknown): string | null {
   return typeof message === 'string' && message.trim() ? message : null
 }
 
-export async function getFalQueueStatus(profile: ApiProfile, endpoint: string, requestId: string) {
-  configureFal(profile)
-  return fal.queue.status(endpoint, { requestId, logs: true })
-}
-
 export async function getFalQueuedImageResult(
   profile: ApiProfile,
   endpoint: string,
@@ -141,13 +154,12 @@ export async function getFalQueuedImageResult(
   params: TaskParams,
 ): Promise<CallApiResult> {
   configureFal(profile)
+  await fal.queue.subscribeToStatus(endpoint, { requestId, logs: true })
   const result = await fal.queue.result(endpoint, { requestId })
   return parseFalResult(result.data as FalApiResponse, params)
 }
 
 export async function callFalAiImageApi(opts: CallApiOptions, profile: ApiProfile): Promise<CallApiResult> {
-  const mime = MIME_MAP[opts.params.output_format] || 'image/png'
-
   try {
     if (opts.maskDataUrl) {
       assertMaskEditFileSize('遮罩主图文件', getDataUrlDecodedByteSize(opts.inputImageDataUrls[0] ?? ''))
@@ -173,20 +185,7 @@ export async function callFalAiImageApi(opts: CallApiOptions, profile: ApiProfil
     })
     const payload = result.data as FalApiResponse
     opts.onFalRequestEnqueued?.({ requestId: result.requestId, endpoint })
-    const images = await parseFalImages(payload, mime)
-    const actualFalSize = await mapFalImageSize(opts.params.size)
-    const actualParams = mergeActualParams({
-      size: `${actualFalSize.width}x${actualFalSize.height}`,
-      quality: mapFalQuality(opts.params.quality),
-      output_format: opts.params.output_format,
-      n: images.length,
-    })
-    return {
-      images,
-      actualParams,
-      actualParamsList: images.map(() => actualParams),
-      revisedPrompts: images.map(() => undefined),
-    }
+    return parseFalResult(payload, opts.params)
   } catch (err) {
     const falMessage = getFalErrorMessage(err)
     if (falMessage) throw new Error(falMessage)
