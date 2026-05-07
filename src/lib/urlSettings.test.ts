@@ -138,6 +138,61 @@ describe('URL settings params', () => {
     })
   })
 
+  it('activates the first profile imported from URL settings when current settings are customized', () => {
+    const current = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      profiles: [createDefaultOpenAIProfile({
+        id: 'current-openai',
+        name: 'Current OpenAI',
+        baseUrl: 'https://current.example.com/v1',
+        apiKey: 'current-key',
+        model: 'current-model',
+      })],
+      activeProfileId: 'current-openai',
+    })
+    const importedSettings = {
+      customProviders: [{
+        id: 'custom-json',
+        name: 'Custom JSON',
+        submit: {
+          path: 'images/generations',
+          method: 'POST',
+          contentType: 'json',
+          body: { model: '$profile.model', prompt: '$prompt' },
+          result: { imageUrlPaths: ['data.*.url'], b64JsonPaths: [] },
+        },
+      }],
+      profiles: [{
+        id: 'custom-profile',
+        name: 'Custom Profile',
+        provider: 'custom-json',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'custom-key',
+        model: 'custom-model',
+        timeout: 300,
+        apiMode: 'images',
+        codexCli: false,
+        apiProxy: false,
+      }],
+    }
+    const params = new URLSearchParams()
+    params.set('settings', JSON.stringify(importedSettings))
+
+    const next = normalizeSettings({
+      ...current,
+      ...buildSettingsFromUrlParams(current, params),
+    })
+    const activeProfile = next.profiles.find((profile) => profile.id === next.activeProfileId)
+
+    expect(next.activeProfileId).not.toBe('current-openai')
+    expect(activeProfile).toMatchObject({
+      provider: 'custom-json',
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'custom-key',
+      model: 'custom-model',
+    })
+  })
+
   it('imports custom provider settings wrapper from URL params', () => {
     const params = new URLSearchParams()
     params.set('settings', JSON.stringify({

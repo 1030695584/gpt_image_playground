@@ -364,7 +364,7 @@ export default function TaskCard({
               </div>
             {/* 操作按钮 */}
             <div
-              className="flex justify-between items-center w-full flex-shrink-0 mt-0.5"
+              className="flex w-full items-center justify-between flex-shrink-0 mt-0.5 sm:w-auto sm:justify-end sm:gap-1"
               onClick={(e) => e.stopPropagation()}
             >
               {((task.status === 'error' && !isFalReconnecting) || settings.alwaysShowRetryButton) && (

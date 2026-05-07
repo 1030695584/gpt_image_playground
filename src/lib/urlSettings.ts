@@ -4,6 +4,7 @@ import {
   createDefaultOpenAIProfile,
   DEFAULT_IMAGES_MODEL,
   DEFAULT_RESPONSES_MODEL,
+  findEquivalentApiProfile,
   mergeImportedSettings,
   normalizeSettings,
 } from './apiProfiles'
@@ -52,6 +53,24 @@ function getUrlSettingsPayload(searchParams: URLSearchParams): unknown | null {
   }
 }
 
+function activateFirstImportedProfile(settings: AppSettings, importedSettings: unknown): AppSettings {
+  if (!importedSettings || typeof importedSettings !== 'object' || Array.isArray(importedSettings)) return settings
+
+  const record = importedSettings as Record<string, unknown>
+  if (!Array.isArray(record.profiles) || record.profiles.length === 0) return settings
+
+  const imported = normalizeSettings({
+    customProviders: record.customProviders,
+    profiles: record.profiles,
+  })
+  const importedProfile = imported.profiles[0]
+  const activeProfile = findEquivalentApiProfile(settings, importedProfile, imported.customProviders)
+
+  return activeProfile
+    ? normalizeSettings({ ...settings, activeProfileId: activeProfile.id })
+    : settings
+}
+
 export function hasUrlSettingParams(searchParams: URLSearchParams) {
   return URL_SETTING_KEYS.some((key) => searchParams.has(key))
 }
@@ -72,7 +91,7 @@ export function buildSettingsFromUrlParams(currentSettings: Partial<AppSettings>
   const hasLegacyOpenAIParams = apiUrlParam !== null || apiKeyParam !== null || codexCliParam !== null || apiMode !== undefined || modelParam !== null
   const settings = importedSettings == null
     ? normalizeSettings(currentSettings)
-    : mergeImportedSettings(currentSettings, importedSettings)
+    : activateFirstImportedProfile(mergeImportedSettings(currentSettings, importedSettings), importedSettings)
 
   if (hasLegacyOpenAIParams) {
     const profileApiMode = apiMode ?? 'images'

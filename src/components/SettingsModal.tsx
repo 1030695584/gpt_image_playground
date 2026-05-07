@@ -387,6 +387,7 @@ export default function SettingsModal() {
       url.searchParams.set('apiUrl', normalizeBaseUrl(profile.baseUrl.trim() || DEFAULT_SETTINGS.baseUrl))
       if (includeApiKey && profile.apiKey.trim()) url.searchParams.set('apiKey', profile.apiKey.trim())
       url.searchParams.set('apiMode', profile.apiMode)
+      url.searchParams.set('model', profile.model.trim() || getDefaultModelForMode(profile.apiMode))
       if (profile.codexCli) url.searchParams.set('codexCli', 'true')
       return url.toString()
     }
@@ -775,7 +776,7 @@ export default function SettingsModal() {
                       <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.clearInputAfterSubmit ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
                     </button>
                   </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-400">
+                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
                     开启后，提交成功创建任务时会清空提示词和参考图。
                   </div>
                 </div>
@@ -793,7 +794,7 @@ export default function SettingsModal() {
                       <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.persistInputOnRestart ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
                     </button>
                   </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-400">
+                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
                     关闭后，不再持久化提示词和参考图，下次启动会使用空输入框。
                   </div>
                 </div>
@@ -811,7 +812,7 @@ export default function SettingsModal() {
                       <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.reuseTaskApiProfileTemporarily ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
                     </button>
                   </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-400">
+                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
                     开启后，复用历史任务时会临时使用该任务的 API 配置，找不到该配置时提交会提示；关闭后，会继续使用当前的 API 配置。
                   </div>
                 </div>
@@ -829,7 +830,7 @@ export default function SettingsModal() {
                       <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.alwaysShowRetryButton ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
                     </button>
                   </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-400">
+                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
                     开启后，即使任务成功生成，也会在任务卡片和详情页显示重试按钮。
                   </div>
                 </div>
@@ -1027,7 +1028,7 @@ export default function SettingsModal() {
                       <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${activeProfile.codexCli ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
                     </button>
                   </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-400">
+                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
                     开启后应用 Codex CLI 实际支持的参数。支持查询参数覆盖：<code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">codexCli=true</code>。
                   </div>
                 </div>
@@ -1048,7 +1049,7 @@ export default function SettingsModal() {
                       <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${activeProfile.apiProxy ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
                     </button>
                   </div>
-                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-400">
+                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
                     由当前部署提供同源代理，用于解决浏览器跨域限制；开启后 API URL 设置会被忽略。
                   </div>
                 </div>
@@ -1137,6 +1138,9 @@ export default function SettingsModal() {
                     <>Responses API 需要使用支持 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">image_generation</code> 工具的文本模型，例如 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_RESPONSES_MODEL}</code>。</>
                   ) : (
                     <>Images API 需要使用 GPT Image 模型，例如 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_IMAGES_MODEL}</code>。</>
+                  )}
+                  {activeProfile.provider === 'openai' && (
+                    <>支持通过查询参数覆盖：<code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">?model=</code>。</>
                   )}
                 </div>
               </label>
