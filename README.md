@@ -247,6 +247,8 @@ https://cooksleep.github.io/gpt_image_playground?apiUrl={address}&apiKey={key}&m
 如果需要导入自定义格式的 API 配置，请使用 `settings` 参数并传入 URL 编码后的完整 JSON：
 - `?settings={URL编码后的JSON}`（只读取 `customProviders` 和 `profiles` 列表）
 
+> 推荐在项目内的 **设置 - API 配置 - 服务商类型 - 创建自定义服务商 - AI 一键生成与导入** 完成配置生成与导入后，在 **API 配置 - 当前配置 - 复制icon** 处一键复制可导入配置的 URL（可选择不包含 API key）
+
 JSON 结构示例：
 
 ```json
