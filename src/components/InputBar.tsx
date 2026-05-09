@@ -6,6 +6,7 @@ import { getActiveApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
+import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import Select from './Select'
 import SizePickerModal from './SizePickerModal'
 import ViewportTooltip from './ViewportTooltip'
@@ -1006,7 +1007,7 @@ export default function InputBar() {
         <span className="text-gray-400 dark:text-gray-500 ml-1">尺寸</span>
         <button
           type="button"
-          onClick={() => setShowSizePicker(true)}
+          onClick={() => { dismissAllTooltips(); setShowSizePicker(true) }}
           className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] focus:outline-none text-xs text-left transition-all duration-200 shadow-sm font-mono"
           title="选择尺寸"
         >
@@ -1193,20 +1194,20 @@ export default function InputBar() {
       <div data-input-bar className="fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl px-3 sm:px-4 transition-all duration-300">
         {selectedTaskIds.length > 0 && (
           <div className="flex justify-center mb-3">
-            <div className="bg-gray-800/90 dark:bg-gray-800/90 backdrop-blur shadow-lg rounded-full flex items-center p-1 border border-white/10 pointer-events-auto">
+            <div className="bg-white/90 dark:bg-gray-800/90 backdrop-blur shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-lg rounded-full flex items-center p-1 border border-gray-200/50 dark:border-white/10 pointer-events-auto">
               <button
                 onClick={clearSelection}
-                className="p-2 text-gray-300 hover:text-white transition-colors"
+                className="p-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
                 title="取消选择"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
-              <div className="w-px h-5 bg-white/20 mx-1"></div>
+              <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
               <button
                 onClick={handleSelectAllToggle}
-                className="p-2 text-blue-400 hover:text-blue-300 transition-colors"
+                className="p-2 text-blue-500 dark:text-blue-400 hover:text-blue-600 dark:hover:text-blue-300 transition-colors"
                 title={selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0 ? "取消全选" : "全选当前可见"}
               >
                 {selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0 ? (
@@ -1220,10 +1221,10 @@ export default function InputBar() {
                   </svg>
                 )}
               </button>
-              <div className="w-px h-5 bg-white/20 mx-1"></div>
+              <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
               <button
                 onClick={handleToggleFavorite}
-                className="p-2 text-yellow-400 hover:text-yellow-300 transition-colors"
+                className="p-2 text-yellow-500 dark:text-yellow-400 hover:text-yellow-600 dark:hover:text-yellow-300 transition-colors"
                 title="收藏/取消收藏"
               >
                 {selectedTaskIds.length > 0 && selectedTaskIds.every((id) => tasks.find((t) => t.id === id)?.isFavorite) ? (
@@ -1236,20 +1237,20 @@ export default function InputBar() {
                   </svg>
                 )}
               </button>
-              <div className="w-px h-5 bg-white/20 mx-1"></div>
+              <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
               <button
                 onClick={handleDownloadSelected}
-                className="p-2 text-blue-400 hover:text-blue-300 transition-colors"
+                className="p-2 text-green-500 dark:text-green-400 hover:text-green-600 dark:hover:text-green-300 transition-colors"
                 title="批量下载"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                 </svg>
               </button>
-              <div className="w-px h-5 bg-white/20 mx-1"></div>
+              <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
               <button
                 onClick={handleDeleteSelected}
-                className="p-2 text-red-400 hover:text-red-300 transition-colors"
+                className="p-2 text-red-500 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors"
                 title="删除选中"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

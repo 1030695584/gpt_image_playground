@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { normalizeBaseUrl } from '../lib/api'
-import { isApiProxyAvailable, readClientDevProxyConfig } from '../lib/devProxy'
+import { isApiProxyAvailable, isApiProxyLocked, readClientDevProxyConfig } from '../lib/devProxy'
 import { useStore, exportData, importData, clearData } from '../store'
 import {
   createDefaultOpenAIProfile,
@@ -27,14 +27,61 @@ import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdown'
 import Select from './Select'
+import { Checkbox } from './Checkbox'
 import ViewportTooltip from './ViewportTooltip'
-import { ChevronDownIcon, CloseIcon, CopyIcon, PlusIcon, TrashIcon, GithubIcon, ExportIcon, ImportIcon } from './icons'
+import { ChevronDownIcon, CloseIcon, CopyIcon, PlusIcon, TrashIcon, GithubIcon, ExportIcon, ImportIcon, DragHandleIcon } from './icons'
 
 function newId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 }
 
 const ADD_CUSTOM_PROVIDER_VALUE = '__add_custom_provider__'
+const COPY_IMPORT_URL_OPTIONS_STORAGE_KEY = 'gpt-image-playground.copy-import-url-options'
+
+const DEFAULT_COPY_IMPORT_URL_OPTIONS = {
+  includeApiKey: false,
+  useNewApiAddress: false,
+  useNewApiKey: true,
+  useNewApiModel: false,
+}
+
+type CopyImportUrlOptions = typeof DEFAULT_COPY_IMPORT_URL_OPTIONS
+
+function readCopyImportUrlOptions(): CopyImportUrlOptions {
+  if (typeof window === 'undefined') return DEFAULT_COPY_IMPORT_URL_OPTIONS
+
+  try {
+    const saved = window.localStorage.getItem(COPY_IMPORT_URL_OPTIONS_STORAGE_KEY)
+    if (!saved) return DEFAULT_COPY_IMPORT_URL_OPTIONS
+
+    const parsed = JSON.parse(saved) as Partial<CopyImportUrlOptions> | null
+    if (!parsed || typeof parsed !== 'object') return DEFAULT_COPY_IMPORT_URL_OPTIONS
+
+
+    return {
+      includeApiKey: false,
+      useNewApiAddress: Boolean(parsed.useNewApiAddress),
+      useNewApiKey: parsed.useNewApiKey === undefined ? true : Boolean(parsed.useNewApiKey),
+      useNewApiModel: Boolean(parsed.useNewApiModel),
+    }
+  } catch {
+    return DEFAULT_COPY_IMPORT_URL_OPTIONS
+  }
+}
+
+function saveCopyImportUrlOptions(options: CopyImportUrlOptions) {
+  if (typeof window === 'undefined') return
+
+  try {
+    window.localStorage.setItem(COPY_IMPORT_URL_OPTIONS_STORAGE_KEY, JSON.stringify({
+      useNewApiAddress: options.useNewApiAddress,
+      useNewApiKey: options.useNewApiKey,
+      useNewApiModel: options.useNewApiModel,
+    }))
+  } catch {
+    // localStorage 不可用时只保留当前会话状态。
+  }
+}
 
 interface CustomProviderForm {
   json: string
@@ -108,6 +155,7 @@ function customProviderFormToInput(form: CustomProviderForm) {
 }
 
 function isPristineNewOpenAIProfile(profile: ApiProfile) {
+  const defaultProfile = createDefaultOpenAIProfile({ id: profile.id, name: '新配置' })
   return profile.name === '新配置' &&
     profile.provider === 'openai' &&
     profile.baseUrl === DEFAULT_SETTINGS.baseUrl &&
@@ -116,7 +164,7 @@ function isPristineNewOpenAIProfile(profile: ApiProfile) {
     profile.timeout === DEFAULT_SETTINGS.timeout &&
     profile.apiMode === 'images' &&
     profile.codexCli === false &&
-    profile.apiProxy === false
+    profile.apiProxy === defaultProfile.apiProxy
 }
 
 function getImportedProfileFromMergedSettings(
@@ -254,19 +302,44 @@ export default function SettingsModal() {
   const [importTasks, setImportTasks] = useState(true)
   const [clearConfig, setClearConfig] = useState(true)
   const [clearTasks, setClearTasks] = useState(true)
+  const [isImportingData, setIsImportingData] = useState(false)
+  const [isImportingJson, setIsImportingJson] = useState(false)
+  const [draggedProfileId, setDraggedProfileId] = useState<string | null>(null)
+  const [dragOverProfileId, setDragOverProfileId] = useState<string | null>(null)
+  const [dragDropPosition, setDragDropPosition] = useState<'before' | 'after' | null>(null)
+  const [profileTouchDragPreview, setProfileTouchDragPreview] = useState<{
+    label: string
+    providerLabel: string
+    x: number
+    y: number
+    width: number
+    height: number
+    offsetX: number
+    offsetY: number
+  } | null>(null)
+  const profileTouchDragRef = useRef<{ id: string, startX: number, startY: number, moved: boolean } | null>(null)
+  const [copyImportUrlProfile, setCopyImportUrlProfile] = useState<ApiProfile | null>(null)
+  const [copyImportUrlOptions, setCopyImportUrlOptions] = useState<CopyImportUrlOptions>(readCopyImportUrlOptions)
 
-  const apiProxyAvailable = isApiProxyAvailable(readClientDevProxyConfig())
+  const apiProxyConfig = readClientDevProxyConfig()
+  const apiProxyAvailable = isApiProxyAvailable(apiProxyConfig)
+  const apiProxyLocked = isApiProxyLocked(apiProxyConfig)
   const activeProfile = draft.profiles.find((profile) => profile.id === draft.activeProfileId) ?? draft.profiles[0] ?? getActiveApiProfile(draft)
-  const apiProxyEnabled = apiProxyAvailable && activeProfile.provider === 'openai' && activeProfile.apiProxy
+  const apiProxyChecked = activeProfile.provider === 'openai' && (apiProxyLocked || activeProfile.apiProxy)
+  const apiProxyEnabled = apiProxyAvailable && activeProfile.provider === 'openai' && apiProxyChecked
   const activeProviderIsOpenAICompatible = isOpenAICompatibleProvider(draft, activeProfile.provider)
+  const activeProviderUsesApiUrl = activeProviderIsOpenAICompatible || activeProfile.provider === 'fal'
   const activeCustomProvider = draft.customProviders.find((provider) => provider.id === activeProfile.provider)
-  const providerOptions = [
-    { label: '创建自定义服务商', value: ADD_CUSTOM_PROVIDER_VALUE, variant: 'action' as const },
-    { label: 'OpenAI 兼容接口', value: 'openai' },
-    { label: 'fal.ai', value: 'fal' },
+  const defaultProviderOrder = ['openai', 'fal', ...draft.customProviders.map(p => p.id)]
+  const providerOrder = draft.providerOrder || defaultProviderOrder
+
+  const unorderedProviderOptions = [
+    { label: 'OpenAI 兼容接口', value: 'openai', draggable: true },
+    { label: 'fal.ai', value: 'fal', draggable: true },
     ...draft.customProviders.map((provider) => ({
       label: provider.name,
       value: provider.id,
+      draggable: true,
       actions: [
         { label: '编辑', onClick: () => openEditCustomProvider(provider) },
         {
@@ -276,6 +349,17 @@ export default function SettingsModal() {
         },
       ],
     })),
+  ]
+
+  const providerOptions = [
+    { label: '创建自定义服务商', value: ADD_CUSTOM_PROVIDER_VALUE, variant: 'action' as const },
+    ...unorderedProviderOptions.sort((a, b) => {
+      const aIndex = providerOrder.indexOf(String(a.value))
+      const bIndex = providerOrder.indexOf(String(b.value))
+      const validA = aIndex !== -1 ? aIndex : defaultProviderOrder.indexOf(String(a.value))
+      const validB = bIndex !== -1 ? bIndex : defaultProviderOrder.indexOf(String(b.value))
+      return validA - validB
+    })
   ]
 
   const getDefaultModelForMode = (apiMode: AppSettings['apiMode']) =>
@@ -295,13 +379,18 @@ export default function SettingsModal() {
     const displaySettings = normalizedSettings.reuseTaskApiProfileTemporarily && reusedTaskApiProfileId && normalizedSettings.profiles.some((profile) => profile.id === reusedTaskApiProfileId)
       ? normalizeSettings({ ...normalizedSettings, activeProfileId: reusedTaskApiProfileId })
       : normalizedSettings
-    const nextDraft = normalizeSettings(apiProxyAvailable ? displaySettings : {
+    const nextDraft = normalizeSettings({
       ...displaySettings,
-      profiles: displaySettings.profiles.map((profile) => ({ ...profile, apiProxy: false })),
+      profiles: displaySettings.profiles.map((profile) => ({
+        ...profile,
+        apiProxy: profile.provider === 'openai' && apiProxyAvailable
+          ? (apiProxyLocked || profile.apiProxy)
+          : false,
+      })),
     })
     setDraft(nextDraft)
     setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
-  }, [apiProxyAvailable, showSettings, settings, reusedTaskApiProfileId])
+  }, [apiProxyAvailable, apiProxyLocked, showSettings, settings, reusedTaskApiProfileId])
 
   useEffect(() => {
     setTimeoutInput(String(activeProfile.timeout))
@@ -336,6 +425,27 @@ export default function SettingsModal() {
     if (llmPromptTooltipTimerRef.current != null) window.clearTimeout(llmPromptTooltipTimerRef.current)
   }, [])
 
+  useEffect(() => {
+    if (!profileTouchDragPreview) return
+
+    const preventTouchScroll = (event: TouchEvent) => {
+      event.preventDefault()
+    }
+    const listenerOptions = { passive: false, capture: true } as AddEventListenerOptions
+    const previousOverflow = document.body.style.overflow
+    const previousOverscroll = document.body.style.overscrollBehavior
+
+    document.body.style.overflow = 'hidden'
+    document.body.style.overscrollBehavior = 'none'
+    window.addEventListener('touchmove', preventTouchScroll, listenerOptions)
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.body.style.overscrollBehavior = previousOverscroll
+      window.removeEventListener('touchmove', preventTouchScroll, listenerOptions)
+    }
+  }, [profileTouchDragPreview])
+
   const clearProfileImportUrlTooltipTimer = () => {
     if (profileImportUrlTooltipTimerRef.current != null) {
       window.clearTimeout(profileImportUrlTooltipTimerRef.current)
@@ -362,7 +472,7 @@ export default function SettingsModal() {
         baseUrl: normalizedBaseUrl,
         model: profile.model.trim() || defaultModel,
         timeout: Number(profile.timeout) || DEFAULT_SETTINGS.timeout,
-        apiProxy: profile.provider === 'openai' && apiProxyAvailable ? profile.apiProxy : false,
+        apiProxy: profile.provider === 'openai' && apiProxyAvailable ? (apiProxyLocked || profile.apiProxy) : false,
         codexCli: profile.provider === 'openai' ? profile.codexCli : false,
       }
     })
@@ -378,36 +488,70 @@ export default function SettingsModal() {
     setSettings(normalizedDraft)
   }
 
-  const createProfileImportUrl = (profile: ApiProfile, includeApiKey: boolean) => {
+  const updateCopyImportUrlOptions = (patch: Partial<CopyImportUrlOptions>) => {
+    setCopyImportUrlOptions((previous) => {
+      const next = { ...previous, ...patch, includeApiKey: false }
+      saveCopyImportUrlOptions(next)
+      return next
+    })
+  }
+
+  const createProfileImportUrl = (profile: ApiProfile, options: CopyImportUrlOptions) => {
     const url = new URL(window.location.href)
     url.search = ''
     url.hash = ''
 
     if (profile.provider === 'openai') {
-      url.searchParams.set('apiUrl', normalizeBaseUrl(profile.baseUrl.trim() || DEFAULT_SETTINGS.baseUrl))
-      if (includeApiKey && profile.apiKey.trim()) url.searchParams.set('apiKey', profile.apiKey.trim())
+      const baseUrl = profile.baseUrl.trim() || DEFAULT_SETTINGS.baseUrl
+      url.searchParams.set('apiUrl', options.useNewApiAddress && !options.includeApiKey ? '{address}' : normalizeBaseUrl(baseUrl))
+      if (options.includeApiKey && profile.apiKey.trim()) {
+        url.searchParams.set('apiKey', profile.apiKey.trim())
+      } else if (!options.includeApiKey && options.useNewApiKey) {
+        url.searchParams.set('apiKey', '{key}')
+      }
       url.searchParams.set('apiMode', profile.apiMode)
-      url.searchParams.set('model', profile.model.trim() || getDefaultModelForMode(profile.apiMode))
+      const model = profile.model.trim() || getDefaultModelForMode(profile.apiMode)
+      url.searchParams.set('model', !options.includeApiKey && options.useNewApiModel ? '{model}' : model)
       if (profile.codexCli) url.searchParams.set('codexCli', 'true')
-      return url.toString()
+
+      let result = url.toString()
+      if (!options.includeApiKey) {
+        if (options.useNewApiAddress) result = result.replace('%7Baddress%7D', '{address}')
+        if (options.useNewApiKey) result = result.replace('%7Bkey%7D', '{key}')
+        if (options.useNewApiModel) result = result.replace('%7Bmodel%7D', '{model}')
+      }
+      return result
     }
 
     const provider = draft.customProviders.find((item) => item.id === profile.provider)
     const importProfile: ApiProfile = {
       ...profile,
-      apiKey: includeApiKey ? profile.apiKey : '',
+      apiKey: options.includeApiKey ? profile.apiKey : '',
+    }
+    if (!options.includeApiKey) {
+      if (options.useNewApiAddress) importProfile.baseUrl = '{address}'
+      if (options.useNewApiKey) importProfile.apiKey = '{key}'
+      if (options.useNewApiModel) importProfile.model = '{model}'
     }
     url.searchParams.set('settings', JSON.stringify({
       customProviders: provider ? [provider] : [],
       profiles: [importProfile],
     }))
-    return url.toString()
+
+    let result = url.toString()
+    if (!options.includeApiKey) {
+      if (options.useNewApiAddress) result = result.replace(/%7Baddress%7D/g, '{address}')
+      if (options.useNewApiKey) result = result.replace(/%7Bkey%7D/g, '{key}')
+      if (options.useNewApiModel) result = result.replace(/%7Bmodel%7D/g, '{model}')
+    }
+    return result
   }
 
-  const copyProfileImportUrl = async (profile: ApiProfile, includeApiKey: boolean) => {
+  const copyProfileImportUrl = async (profile: ApiProfile, options: CopyImportUrlOptions) => {
     try {
-      await copyTextToClipboard(createProfileImportUrl(profile, includeApiKey))
-      showToast(includeApiKey ? '导入 URL 已复制（包含 API Key）' : '导入 URL 已复制', 'success')
+      await copyTextToClipboard(createProfileImportUrl(profile, options))
+      showToast(options.includeApiKey ? '导入 URL 已复制（包含 API Key）' : '导入 URL 已复制', 'success')
+      setCopyImportUrlProfile(null)
     } catch (err) {
       showToast(getClipboardFailureMessage('复制导入 URL 失败', err), 'error')
     }
@@ -415,14 +559,9 @@ export default function SettingsModal() {
 
   const confirmCopyProfileImportUrl = (profile: ApiProfile) => {
     setShowProfileMenu(false)
-    setConfirmDialog({
-      title: `复制导入配置「${profile.name}」的 URL`,
-      message: '是否包含 API Key？',
-      cancelText: '不包含',
-      confirmText: '包含 API Key',
-      action: () => void copyProfileImportUrl(profile, true),
-      cancelAction: () => void copyProfileImportUrl(profile, false),
-    })
+    setProfileImportUrlTooltipVisible(false)
+    setCopyImportUrlProfile(profile)
+    setCopyImportUrlOptions(readCopyImportUrlOptions())
   }
 
   const getDraftWithActiveProfilePatch = (patch: Partial<ApiProfile>) => ({
@@ -476,12 +615,17 @@ export default function SettingsModal() {
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
-      const imported = await importData(file, { importConfig, importTasks })
-      if (imported) {
-        const nextDraft = normalizeSettings(useStore.getState().settings)
-        setDraft(nextDraft)
-        setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
-        setShowProfileMenu(false)
+      setIsImportingData(true)
+      try {
+        const imported = await importData(file, { importConfig, importTasks })
+        if (imported) {
+          const nextDraft = normalizeSettings(useStore.getState().settings)
+          setDraft(nextDraft)
+          setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
+          setShowProfileMenu(false)
+        }
+      } finally {
+        setIsImportingData(false)
       }
     }
     e.target.value = ''
@@ -514,6 +658,143 @@ export default function SettingsModal() {
     setShowProfileMenu(false)
   }
   
+  const handleProfileDragStart = (e: React.DragEvent, id: string) => {
+    setDraggedProfileId(id)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', id)
+  }
+
+  const handleProfileDragOver = (e: React.DragEvent, targetId: string) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+
+    const targetElement = e.currentTarget as HTMLElement
+    const rect = targetElement.getBoundingClientRect()
+    const position = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+
+    if (dragOverProfileId !== targetId || dragDropPosition !== position) {
+      setDragOverProfileId(targetId)
+      setDragDropPosition(position)
+    }
+
+    const scrollContainer = targetElement.closest('.custom-scrollbar')
+    if (scrollContainer) {
+      const containerRect = scrollContainer.getBoundingClientRect()
+      const scrollThreshold = 30
+
+      if (e.clientY < containerRect.top + scrollThreshold) {
+        scrollContainer.scrollTop -= 10
+      } else if (e.clientY > containerRect.bottom - scrollThreshold) {
+        scrollContainer.scrollTop += 10
+      }
+    }
+  }
+
+  const handleProfileDragEnd = () => {
+    setDraggedProfileId(null)
+    setDragOverProfileId(null)
+    setDragDropPosition(null)
+    setProfileTouchDragPreview(null)
+    profileTouchDragRef.current = null
+  }
+
+  const moveProfileToDropTarget = (sourceId: string, targetId: string, position: 'before' | 'after' | null) => {
+    if (!sourceId || sourceId === targetId) return
+
+    const sourceIndex = draft.profiles.findIndex((p) => p.id === sourceId)
+    const targetIndex = draft.profiles.findIndex((p) => p.id === targetId)
+    if (sourceIndex < 0 || targetIndex < 0) return
+
+    const newProfiles = [...draft.profiles]
+    const [removed] = newProfiles.splice(sourceIndex, 1)
+
+    let newTargetIndex = targetIndex
+    if (position === 'after') newTargetIndex++
+    if (sourceIndex < targetIndex) newTargetIndex--
+
+    newProfiles.splice(newTargetIndex, 0, removed)
+
+    const nextDraft = normalizeSettings({ ...draft, profiles: newProfiles })
+    commitSettings(nextDraft)
+  }
+
+  const handleProfileDrop = (e: React.DragEvent, targetId: string) => {
+    e.preventDefault()
+    moveProfileToDropTarget(e.dataTransfer.getData('text/plain'), targetId, dragDropPosition)
+    handleProfileDragEnd()
+  }
+
+  const handleProfileTouchStart = (e: React.TouchEvent, profile: ApiProfile) => {
+    if (!(e.target as HTMLElement).closest('[data-drag-handle]')) return
+    const touch = e.touches[0]
+    const rect = e.currentTarget.getBoundingClientRect()
+
+    e.preventDefault()
+    e.stopPropagation()
+    profileTouchDragRef.current = { id: profile.id, startX: touch.clientX, startY: touch.clientY, moved: false }
+    setDraggedProfileId(profile.id)
+    setProfileTouchDragPreview({
+      label: profile.name,
+      providerLabel: getApiProviderLabel(draft, profile.provider),
+      x: touch.clientX,
+      y: touch.clientY,
+      width: rect.width,
+      height: rect.height,
+      offsetX: touch.clientX - rect.left,
+      offsetY: touch.clientY - rect.top,
+    })
+  }
+
+  const handleProfileTouchMove = (e: React.TouchEvent) => {
+    const drag = profileTouchDragRef.current
+    if (!drag) return
+    const touch = e.touches[0]
+
+    if (!drag.moved) {
+      if (Math.abs(touch.clientX - drag.startX) > 5 || Math.abs(touch.clientY - drag.startY) > 5) {
+        drag.moved = true
+      } else {
+        return
+      }
+    }
+
+    e.preventDefault()
+    setProfileTouchDragPreview((current) => current ? { ...current, x: touch.clientX, y: touch.clientY } : current)
+
+    const el = document.elementFromPoint(touch.clientX, touch.clientY)
+    const targetElement = el?.closest('[data-profile-id]') as HTMLElement | null
+    if (!targetElement) return
+
+    const targetId = targetElement.getAttribute('data-profile-id')
+    if (!targetId) return
+
+    const rect = targetElement.getBoundingClientRect()
+    const position = touch.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    setDragOverProfileId(targetId)
+    setDragDropPosition(position)
+
+    const scrollContainer = targetElement.closest('.custom-scrollbar') as HTMLElement | null
+    if (scrollContainer) {
+      const containerRect = scrollContainer.getBoundingClientRect()
+      const scrollThreshold = 30
+      if (touch.clientY < containerRect.top + scrollThreshold) {
+        scrollContainer.scrollTop -= 10
+      } else if (touch.clientY > containerRect.bottom - scrollThreshold) {
+        scrollContainer.scrollTop += 10
+      }
+    }
+  }
+
+  const handleProfileTouchEnd = (e: React.TouchEvent) => {
+    const drag = profileTouchDragRef.current
+    if (!drag) return
+    if (drag.moved && dragOverProfileId && dragOverProfileId !== drag.id) {
+      e.preventDefault()
+      moveProfileToDropTarget(drag.id, dragOverProfileId, dragDropPosition)
+    }
+    handleProfileDragEnd()
+  }
+
   const deleteProfile = (id: string) => {
     if (draft.profiles.length <= 1) return
     if (id === reusedTaskApiProfileId) setReusedTaskApiProfile(null)
@@ -523,6 +804,25 @@ export default function SettingsModal() {
       profiles: nextProfiles,
       activeProfileId: draft.activeProfileId === id ? nextProfiles[0].id : draft.activeProfileId,
     })
+    commitSettings(nextDraft)
+  }
+
+  const handleProviderReorder = (sourceValue: string | number, targetValue: string | number, position: 'before' | 'after' | null) => {
+    const currentOrder = draft.providerOrder || ['openai', 'fal', ...draft.customProviders.map(p => p.id)]
+    const sourceIndex = currentOrder.indexOf(String(sourceValue))
+    const targetIndex = currentOrder.indexOf(String(targetValue))
+    if (sourceIndex < 0 || targetIndex < 0) return
+
+    const newOrder = [...currentOrder]
+    const [removed] = newOrder.splice(sourceIndex, 1)
+
+    let newTargetIndex = targetIndex
+    if (position === 'after') newTargetIndex++
+    if (sourceIndex < targetIndex) newTargetIndex--
+
+    newOrder.splice(newTargetIndex, 0, removed)
+
+    const nextDraft = normalizeSettings({ ...draft, providerOrder: newOrder })
     commitSettings(nextDraft)
   }
 
@@ -633,6 +933,7 @@ export default function SettingsModal() {
   }
 
   const handleCustomProviderJsonPaste = async () => {
+    setIsImportingJson(true)
     try {
       const text = await navigator.clipboard.readText()
       if (!text.trim()) {
@@ -680,6 +981,8 @@ export default function SettingsModal() {
       } else {
         showToast(msg, 'error')
       }
+    } finally {
+      setIsImportingJson(false)
     }
   }
 
@@ -897,7 +1200,7 @@ export default function SettingsModal() {
                         >
                           <button
                             type="button"
-                            onPointerDown={(e) => {
+                            onClick={(e) => {
                               e.preventDefault()
                               createNewProfile()
                             }}
@@ -912,14 +1215,40 @@ export default function SettingsModal() {
                             {draft.profiles.map(profile => (
                               <div
                                 key={profile.id}
+                                data-profile-id={profile.id}
                                 title={profile.name}
-                                onPointerDown={(e) => {
+                                draggable
+                                onDragStart={(e) => handleProfileDragStart(e, profile.id)}
+                                onDragOver={(e) => handleProfileDragOver(e, profile.id)}
+                                onDrop={(e) => handleProfileDrop(e, profile.id)}
+                                onDragEnd={handleProfileDragEnd}
+                                onTouchStart={(e) => handleProfileTouchStart(e, profile)}
+                                onTouchMove={handleProfileTouchMove}
+                                onTouchEnd={handleProfileTouchEnd}
+                                onTouchCancel={handleProfileDragEnd}
+                                onClick={(e) => {
+                                  // Don't switch profile if they are clicking the drag handle
+                                  if ((e.target as HTMLElement).closest('[data-drag-handle]')) return
                                   e.preventDefault()
                                   switchProfile(profile.id)
                                 }}
-                                className={`group flex w-full cursor-pointer items-center justify-between px-3 py-2 text-left text-xs transition-colors ${profile.id === activeProfile.id ? 'bg-blue-50 font-medium text-blue-600 dark:bg-blue-500/10 dark:text-blue-400' : 'text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.06]'}`}
+                                className={`relative group flex w-full cursor-pointer items-center justify-between px-3 py-2 text-left text-xs transition-colors ${draggedProfileId === profile.id ? 'opacity-40 bg-gray-100 dark:bg-white/[0.04]' : profile.id === activeProfile.id ? 'bg-blue-50 font-medium text-blue-600 dark:bg-blue-500/10 dark:text-blue-400' : 'text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.06]'}`}
                               >
+                                {dragOverProfileId === profile.id && dragDropPosition === 'before' && draggedProfileId !== profile.id && (
+                                  <div className="absolute -top-[1px] left-0 right-0 h-[2px] bg-blue-500 rounded-full z-40 shadow-sm pointer-events-none" />
+                                )}
+                                {dragOverProfileId === profile.id && dragDropPosition === 'after' && draggedProfileId !== profile.id && (
+                                  <div className="absolute -bottom-[1px] left-0 right-0 h-[2px] bg-blue-500 rounded-full z-40 shadow-sm pointer-events-none" />
+                                )}
                                 <div className="flex min-w-0 flex-1 items-center gap-2 pr-2">
+                                  <div
+                                    data-drag-handle
+                                    className="flex cursor-grab active:cursor-grabbing items-center justify-center text-gray-400 opacity-60 transition-opacity hover:opacity-100 dark:text-gray-500"
+                                    style={{ touchAction: 'none' }}
+                                    title="拖拽排序"
+                                  >
+                                    <DragHandleIcon className="h-3.5 w-3.5" />
+                                  </div>
                                   <span className="min-w-0 truncate">{profile.name}</span>
                                   <span className={`rounded px-1.5 py-0.5 text-[10px] shrink-0 ${profile.id === activeProfile.id ? 'bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300' : 'bg-gray-100 text-gray-500 dark:bg-white/[0.08] dark:text-gray-400'}`}>
                                     {getApiProviderLabel(draft, profile.provider)}
@@ -929,7 +1258,7 @@ export default function SettingsModal() {
                                 <div className="flex shrink-0 items-center gap-1">
                                   <button
                                     type="button"
-                                    onPointerDown={(e) => {
+                                    onClick={(e) => {
                                       e.preventDefault()
                                       e.stopPropagation()
                                       confirmCopyProfileImportUrl(profile)
@@ -943,7 +1272,7 @@ export default function SettingsModal() {
                                   {draft.profiles.length > 1 && (
                                     <button
                                       type="button"
-                                      onPointerDown={(e) => {
+                                      onClick={(e) => {
                                         e.preventDefault()
                                         e.stopPropagation()
                                         setConfirmDialog({
@@ -984,12 +1313,13 @@ export default function SettingsModal() {
                 <Select
                   value={activeProfile.provider}
                   onChange={handleProviderTypeChange}
+                  onReorder={handleProviderReorder}
                   options={providerOptions}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                 />
               </div>
 
-              {activeProviderIsOpenAICompatible && (
+              {activeProviderUsesApiUrl && (
                 <label className="block">
                   <div className="mb-1.5 flex items-center justify-between">
                     <span className="block text-sm text-gray-600 dark:text-gray-300">API URL</span>
@@ -1000,12 +1330,14 @@ export default function SettingsModal() {
                     onBlur={(e) => commitActiveProfilePatch({ baseUrl: e.target.value })}
                     type="text"
                     disabled={apiProxyEnabled}
-                    placeholder={DEFAULT_SETTINGS.baseUrl}
+                    placeholder={activeProfile.provider === 'fal' ? DEFAULT_FAL_BASE_URL : DEFAULT_SETTINGS.baseUrl}
                     className={`w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50 ${apiProxyEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
                   />
                   <div data-selectable-text className="mt-1.5 min-h-[22px] flex items-center text-xs text-gray-500 dark:text-gray-500">
                     {apiProxyEnabled ? (
                       <span className="text-yellow-600 dark:text-yellow-500">已开启代理，实际请求目标由部署端决定，此处设置被忽略。</span>
+                    ) : activeProfile.provider === 'fal' ? (
+                      <span>默认使用 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">{DEFAULT_FAL_BASE_URL}</code>；填写自定义地址时将作为 fal.ai 代理 URL。</span>
                     ) : (
                       <span>支持通过查询参数覆盖：<code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">?apiUrl=</code></span>
                     )}
@@ -1040,17 +1372,20 @@ export default function SettingsModal() {
                     <span className="block text-sm text-gray-600 dark:text-gray-300">API 代理</span>
                     <button
                       type="button"
-                      onClick={() => updateActiveProfile({ apiProxy: !activeProfile.apiProxy }, true)}
-                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${activeProfile.apiProxy ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                      onClick={() => {
+                        if (!apiProxyLocked) updateActiveProfile({ apiProxy: !activeProfile.apiProxy }, true)
+                      }}
+                      disabled={apiProxyLocked}
+                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${apiProxyChecked ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'} ${apiProxyLocked ? 'cursor-not-allowed opacity-70' : ''}`}
                       role="switch"
-                      aria-checked={activeProfile.apiProxy}
+                      aria-checked={apiProxyChecked}
                       aria-label="API 代理"
                     >
-                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${activeProfile.apiProxy ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${apiProxyChecked ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
                     </button>
                   </div>
                   <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    由当前部署提供同源代理，用于解决浏览器跨域限制；开启后 API URL 设置会被忽略。
+                    {apiProxyLocked ? '当前部署已锁定 API 代理为开启，API URL 设置会被忽略。' : '当前部署提供同源代理时默认开启，可手动关闭。开启后用于解决浏览器跨域限制，API URL 设置会被忽略。'}
                   </div>
                 </div>
               )}
@@ -1146,6 +1481,27 @@ export default function SettingsModal() {
               </label>
 
               {activeProviderIsOpenAICompatible && (
+                <div className="block">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="block text-sm text-gray-600 dark:text-gray-300">返回 Base64 图片数据</span>
+                    <button
+                      type="button"
+                      onClick={() => updateActiveProfile({ responseFormatB64Json: !activeProfile.responseFormatB64Json }, true)}
+                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${activeProfile.responseFormatB64Json ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                      role="switch"
+                      aria-checked={!!activeProfile.responseFormatB64Json}
+                      aria-label="返回 Base64 图片数据"
+                    >
+                      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${activeProfile.responseFormatB64Json ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                    </button>
+                  </div>
+                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+                    开启后在请求体中追加 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">response_format: b64_json</code>，尝试使接口直接返回 Base64 编码的图片数据而非 URL。
+                  </div>
+                </div>
+              )}
+
+              {activeProviderIsOpenAICompatible && (
                 <label className="block">
                   <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">请求超时 (秒)</span>
                   <input
@@ -1164,11 +1520,11 @@ export default function SettingsModal() {
             
             {activeTab === 'data' && (
               <div className="space-y-4">
-                <div className="rounded-2xl bg-blue-50/50 p-4 border border-blue-100/50 dark:bg-blue-500/5 dark:border-blue-500/10 flex items-start gap-3">
-                  <svg className="w-5 h-5 text-blue-500/70 dark:text-blue-400/70 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div className="rounded-2xl bg-gray-50/80 p-4 border border-gray-200/60 dark:bg-white/[0.02] dark:border-white/[0.05] flex items-start gap-3">
+                  <svg className="w-5 h-5 text-blue-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                   </svg>
-                  <div className="text-[13px] leading-relaxed text-blue-800/80 dark:text-blue-300/80">
+                  <div className="text-[13px] leading-relaxed text-gray-500 dark:text-gray-400">
                     所有的配置、任务记录和生成的图片均仅保存在您的浏览器本地（除非您使用的服务商存储了它们）。如果您需要清理浏览器站点数据、重置浏览器或使用其他设备，请先导出备份。
                   </div>
                 </div>
@@ -1179,24 +1535,16 @@ export default function SettingsModal() {
                     <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">导出数据</h4>
                   </div>
                   <div className="flex flex-wrap gap-x-6 gap-y-3">
-                    <label className="flex items-center gap-2 cursor-pointer group">
-                      <div className="relative flex items-center justify-center">
-                        <input type="checkbox" checked={exportConfig} onChange={(e) => setExportConfig(e.target.checked)} className="peer appearance-none w-4 h-4 rounded-[4px] border border-gray-300 bg-white checked:bg-blue-500 checked:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:ring-offset-1 focus:ring-offset-white dark:border-white/15 dark:bg-white/5 dark:focus:ring-offset-gray-900 transition-all cursor-pointer" />
-                        <svg className="absolute w-2.5 h-2.5 pointer-events-none opacity-0 peer-checked:opacity-100 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      </div>
-                      <span className="text-[13px] font-medium text-gray-700 dark:text-gray-200 group-hover:text-gray-900 dark:group-hover:text-white transition-colors">包含配置</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer group">
-                      <div className="relative flex items-center justify-center">
-                        <input type="checkbox" checked={exportTasks} onChange={(e) => setExportTasks(e.target.checked)} className="peer appearance-none w-4 h-4 rounded-[4px] border border-gray-300 bg-white checked:bg-blue-500 checked:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:ring-offset-1 focus:ring-offset-white dark:border-white/15 dark:bg-white/5 dark:focus:ring-offset-gray-900 transition-all cursor-pointer" />
-                        <svg className="absolute w-2.5 h-2.5 pointer-events-none opacity-0 peer-checked:opacity-100 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      </div>
-                      <span className="text-[13px] font-medium text-gray-700 dark:text-gray-200 group-hover:text-gray-900 dark:group-hover:text-white transition-colors">包含任务和图片</span>
-                    </label>
+                    <Checkbox
+                      checked={exportConfig}
+                      onChange={setExportConfig}
+                      label="包含配置"
+                    />
+                    <Checkbox
+                      checked={exportTasks}
+                      onChange={setExportTasks}
+                      label="包含任务和图片"
+                    />
                   </div>
                   <button
                     onClick={() => exportData({ exportConfig, exportTasks })}
@@ -1213,31 +1561,33 @@ export default function SettingsModal() {
                     <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">导入数据</h4>
                   </div>
                   <div className="flex flex-wrap gap-x-6 gap-y-3">
-                    <label className="flex items-center gap-2 cursor-pointer group">
-                      <div className="relative flex items-center justify-center">
-                        <input type="checkbox" checked={importConfig} onChange={(e) => setImportConfig(e.target.checked)} className="peer appearance-none w-4 h-4 rounded-[4px] border border-gray-300 bg-white checked:bg-blue-500 checked:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:ring-offset-1 focus:ring-offset-white dark:border-white/15 dark:bg-white/5 dark:focus:ring-offset-gray-900 transition-all cursor-pointer" />
-                        <svg className="absolute w-2.5 h-2.5 pointer-events-none opacity-0 peer-checked:opacity-100 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      </div>
-                      <span className="text-[13px] font-medium text-gray-700 dark:text-gray-200 group-hover:text-gray-900 dark:group-hover:text-white transition-colors">包含配置</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer group">
-                      <div className="relative flex items-center justify-center">
-                        <input type="checkbox" checked={importTasks} onChange={(e) => setImportTasks(e.target.checked)} className="peer appearance-none w-4 h-4 rounded-[4px] border border-gray-300 bg-white checked:bg-blue-500 checked:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:ring-offset-1 focus:ring-offset-white dark:border-white/15 dark:bg-white/5 dark:focus:ring-offset-gray-900 transition-all cursor-pointer" />
-                        <svg className="absolute w-2.5 h-2.5 pointer-events-none opacity-0 peer-checked:opacity-100 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      </div>
-                      <span className="text-[13px] font-medium text-gray-700 dark:text-gray-200 group-hover:text-gray-900 dark:group-hover:text-white transition-colors">包含任务和图片</span>
-                    </label>
+                    <Checkbox
+                      checked={importConfig}
+                      onChange={setImportConfig}
+                      label="包含配置"
+                    />
+                    <Checkbox
+                      checked={importTasks}
+                      onChange={setImportTasks}
+                      label="包含任务和图片"
+                    />
                   </div>
                   <button
                     onClick={() => importInputRef.current?.click()}
-                    disabled={!importConfig && !importTasks}
+                    disabled={(!importConfig && !importTasks) || isImportingData}
                     className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
                   >
-                    从 ZIP 导入所选数据
+                    {isImportingData ? (
+                      <>
+                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        导入中...
+                      </>
+                    ) : (
+                      '从 ZIP 导入所选数据'
+                    )}
                   </button>
                   <input
                     ref={importInputRef}
@@ -1254,24 +1604,18 @@ export default function SettingsModal() {
                     <h4 className="text-sm font-bold text-red-500/90 dark:text-red-400">清除数据</h4>
                   </div>
                   <div className="flex flex-wrap gap-x-6 gap-y-3">
-                    <label className="flex items-center gap-2 cursor-pointer group">
-                      <div className="relative flex items-center justify-center">
-                        <input type="checkbox" checked={clearConfig} onChange={(e) => setClearConfig(e.target.checked)} className="peer appearance-none w-4 h-4 rounded-[4px] border border-red-300/60 bg-white checked:bg-red-500 checked:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:ring-offset-1 focus:ring-offset-white dark:border-red-500/30 dark:bg-white/5 dark:focus:ring-offset-gray-900 transition-all cursor-pointer" />
-                        <svg className="absolute w-2.5 h-2.5 pointer-events-none opacity-0 peer-checked:opacity-100 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      </div>
-                      <span className="text-[13px] font-medium text-gray-700 dark:text-gray-200 group-hover:text-gray-900 dark:group-hover:text-white transition-colors">包含配置</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer group">
-                      <div className="relative flex items-center justify-center">
-                        <input type="checkbox" checked={clearTasks} onChange={(e) => setClearTasks(e.target.checked)} className="peer appearance-none w-4 h-4 rounded-[4px] border border-red-300/60 bg-white checked:bg-red-500 checked:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:ring-offset-1 focus:ring-offset-white dark:border-red-500/30 dark:bg-white/5 dark:focus:ring-offset-gray-900 transition-all cursor-pointer" />
-                        <svg className="absolute w-2.5 h-2.5 pointer-events-none opacity-0 peer-checked:opacity-100 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      </div>
-                      <span className="text-[13px] font-medium text-gray-700 dark:text-gray-200 group-hover:text-gray-900 dark:group-hover:text-white transition-colors">包含任务和图片</span>
-                    </label>
+                    <Checkbox
+                      checked={clearConfig}
+                      onChange={setClearConfig}
+                      label="包含配置"
+                      tone="danger"
+                    />
+                    <Checkbox
+                      checked={clearTasks}
+                      onChange={setClearTasks}
+                      label="包含任务和图片"
+                      tone="danger"
+                    />
                   </div>
                   <button
                     onClick={() =>
@@ -1337,8 +1681,8 @@ export default function SettingsModal() {
               setShowCustomProviderImport(false)
               setEditingCustomProviderId(null)
             }} />
-            <div ref={customProviderScrollBoundaryRef} className="relative z-10 w-full max-w-lg rounded-3xl border border-white/50 bg-white/95 p-5 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10 overflow-y-auto overscroll-contain max-h-[85vh] custom-scrollbar">
-              <div className="mb-5 flex items-center justify-between gap-4">
+            <div className="relative z-10 w-full max-w-md rounded-3xl border border-white/50 bg-white/95 p-5 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10 flex flex-col h-[85vh] sm:h-[680px] max-h-[90vh] overflow-hidden">
+              <div className="mb-5 flex items-center justify-between gap-4 shrink-0">
                 <h3 className="text-base font-bold text-gray-800 dark:text-gray-100">
                   {editingCustomProviderId ? '编辑自定义服务商' : '创建自定义服务商'}
                 </h3>
@@ -1357,89 +1701,200 @@ export default function SettingsModal() {
                 </div>
               </div>
 
-              <div className="mb-6 rounded-2xl bg-blue-50/50 p-4 border border-blue-100/50 dark:bg-blue-500/5 dark:border-blue-500/10">
-                <div className="mb-1.5 text-xs font-semibold text-blue-800 dark:text-blue-300">
-                  AI 一键生成与导入
-                </div>
-                <div data-selectable-text className="mb-3 text-[11px] leading-relaxed text-blue-600/80 dark:text-blue-400/80">
-                  复制提示词发给 LLM，可根据 API 文档自动生成完整的配置（包含服务商、模型、URL 等）。复制 LLM 输出的 JSON 后，点击“从剪贴板粘贴并导入”即可一键生效。
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="relative inline-flex">
+              <div ref={customProviderScrollBoundaryRef} className="flex-1 flex flex-col min-h-0 px-1 -mx-1 pb-2">
+                <div className="mb-6 shrink-0 rounded-2xl bg-gray-50/80 p-4 border border-gray-200/60 dark:bg-white/[0.02] dark:border-white/[0.05]">
+                  <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-gray-800 dark:text-gray-200">
+                    <svg className="h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                    AI 一键生成与导入
+                  </div>
+                  <div data-selectable-text className="mb-4 text-xs leading-relaxed text-gray-500 dark:text-gray-400">
+                    复制提示词发给 LLM，可根据 API 文档自动生成完整的配置（包含服务商、模型、URL 等）。复制 LLM 输出的 JSON 后，点击“从剪贴板粘贴并导入”即可一键生效。
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="relative inline-flex">
+                      <button
+                        type="button"
+                        onClick={copyCustomProviderLlmPrompt}
+                        aria-label="复制用于生成完整导入 JSON 的 LLM 提示词"
+                        onMouseEnter={() => setLlmPromptTooltipVisible(true)}
+                        onMouseLeave={() => setLlmPromptTooltipVisible(false)}
+                        onFocus={() => setLlmPromptTooltipVisible(true)}
+                        onBlur={() => setLlmPromptTooltipVisible(false)}
+                        onTouchStart={() => {
+                          clearLlmPromptTooltipTimer()
+                          llmPromptTooltipTimerRef.current = window.setTimeout(() => {
+                            setLlmPromptTooltipVisible(true)
+                            llmPromptTooltipTimerRef.current = null
+                          }, 450)
+                        }}
+                        onTouchEnd={clearLlmPromptTooltipTimer}
+                        onTouchCancel={clearLlmPromptTooltipTimer}
+                        className="flex items-center gap-1.5 rounded-xl bg-white px-3 py-2 text-xs font-medium text-gray-700 shadow-sm border border-gray-200/80 transition hover:bg-gray-50 hover:text-gray-900 dark:bg-white/[0.05] dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.08] dark:hover:text-white"
+                      >
+                        复制生成提示词
+                      </button>
+                      <ViewportTooltip visible={llmPromptTooltipVisible} className="w-56 whitespace-normal text-center">
+                        生成完整的服务商和配置信息，包含模型和接口地址，导入后只需填入 API Key。
+                      </ViewportTooltip>
+                    </span>
                     <button
                       type="button"
-                      onClick={copyCustomProviderLlmPrompt}
-                      aria-label="复制用于生成完整导入 JSON 的 LLM 提示词"
-                      onMouseEnter={() => setLlmPromptTooltipVisible(true)}
-                      onMouseLeave={() => setLlmPromptTooltipVisible(false)}
-                      onFocus={() => setLlmPromptTooltipVisible(true)}
-                      onBlur={() => setLlmPromptTooltipVisible(false)}
-                      onTouchStart={() => {
-                        clearLlmPromptTooltipTimer()
-                        llmPromptTooltipTimerRef.current = window.setTimeout(() => {
-                          setLlmPromptTooltipVisible(true)
-                          llmPromptTooltipTimerRef.current = null
-                        }, 450)
-                      }}
-                      onTouchEnd={clearLlmPromptTooltipTimer}
-                      onTouchCancel={clearLlmPromptTooltipTimer}
-                      className="flex items-center gap-1.5 rounded-xl bg-white px-3 py-2 text-xs font-medium text-blue-600 shadow-sm border border-blue-200/50 transition hover:bg-blue-50 dark:bg-blue-500/10 dark:border-blue-500/20 dark:text-blue-400 dark:hover:bg-blue-500/20"
+                      onClick={handleCustomProviderJsonPaste}
+                      disabled={isImportingJson}
+                      className="flex items-center gap-1.5 rounded-xl bg-white px-3 py-2 text-xs font-medium text-gray-700 shadow-sm border border-gray-200/80 transition hover:bg-gray-50 hover:text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-white/[0.05] dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.08] dark:hover:text-white"
                     >
-                      复制生成提示词
-                    </button>
-                    <ViewportTooltip visible={llmPromptTooltipVisible} className="w-56 whitespace-normal text-center">
-                      生成完整的服务商和配置信息，包含模型和接口地址，导入后只需填入 API Key。
-                    </ViewportTooltip>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleCustomProviderJsonPaste}
-                    className="flex items-center gap-1.5 rounded-xl bg-white px-3 py-2 text-xs font-medium text-blue-600 shadow-sm border border-blue-200/50 transition hover:bg-blue-50 dark:bg-blue-500/10 dark:border-blue-500/20 dark:text-blue-400 dark:hover:bg-blue-500/20"
-                  >
-                    从剪贴板粘贴并导入
+                    {isImportingJson ? (
+                      <>
+                        <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        导入中...
+                      </>
+                    ) : (
+                      '从剪贴板粘贴并导入'
+                    )}
                   </button>
                 </div>
               </div>
 
-              <div className="space-y-3">
-                <label className="block">
-                  <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">手动编辑 (仅接口映射 Manifest)</span>
+              <div className="flex-1 flex flex-col min-h-0">
+                <label className="flex-1 flex flex-col min-h-0">
+                  <span className="mb-1 shrink-0 block text-xs text-gray-500 dark:text-gray-400">手动编辑 (仅接口映射 Manifest)</span>
                   <textarea
                     value={customProviderForm.json}
                     onChange={(e) => updateCustomProviderForm({ json: e.target.value })}
                     spellCheck={false}
-                    className="min-h-[420px] w-full resize-y rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 font-mono text-xs leading-relaxed text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    className="flex-1 min-h-[150px] w-full resize-none rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 font-mono text-xs leading-relaxed text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50 custom-scrollbar"
                   />
                 </label>
               </div>
 
                 {customProviderImportError && (
-                  <div data-selectable-text className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-500 dark:bg-red-500/10 dark:text-red-300">
+                  <div data-selectable-text className="shrink-0 mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-500 dark:bg-red-500/10 dark:text-red-300">
                     {customProviderImportError}
                   </div>
                 )}
-                <div className="mt-4 flex justify-end gap-2 pb-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowCustomProviderImport(false)
-                      setEditingCustomProviderId(null)
-                    }}
-                    className="rounded-xl bg-gray-100 px-4 py-2 text-sm text-gray-600 transition hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"
-                  >
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    onClick={saveCustomProvider}
-                    className="rounded-xl bg-blue-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-600"
-                  >
-                    {editingCustomProviderId ? '保存修改' : '创建并使用'}
-                  </button>
-                </div>
+              </div>
+              <div className="mt-4 flex justify-end gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCustomProviderImport(false)
+                    setEditingCustomProviderId(null)
+                  }}
+                  className="rounded-xl bg-gray-100 px-4 py-2 text-sm text-gray-600 transition hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={saveCustomProvider}
+                  className="rounded-xl bg-blue-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-600"
+                >
+                  {editingCustomProviderId ? '保存修改' : '创建并使用'}
+                </button>
+              </div>
             </div>
           </div>
           , document.body)}
+        {profileTouchDragPreview && createPortal(
+          <div
+            className="fixed pointer-events-none z-[110] flex items-center justify-between gap-2 rounded-xl bg-white/95 px-3 py-2 text-xs text-gray-700 shadow-xl ring-1 ring-black/5 backdrop-blur-xl dark:bg-gray-900/95 dark:text-gray-300 dark:ring-white/10"
+            style={{
+              left: profileTouchDragPreview.x - profileTouchDragPreview.offsetX,
+              top: profileTouchDragPreview.y - profileTouchDragPreview.offsetY,
+              width: profileTouchDragPreview.width,
+              minHeight: profileTouchDragPreview.height,
+            }}
+          >
+            <div className="flex min-w-0 flex-1 items-center gap-2 pr-2">
+              <DragHandleIcon className="h-3.5 w-3.5 shrink-0 text-gray-400 dark:text-gray-500" />
+              <span className="min-w-0 truncate">{profileTouchDragPreview.label}</span>
+              <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-white/[0.08] dark:text-gray-400">
+                {profileTouchDragPreview.providerLabel}
+              </span>
+            </div>
+          </div>,
+          document.body,
+        )}
+        {copyImportUrlProfile && createPortal(
+          <div
+            data-no-drag-select
+            className="fixed inset-0 z-[110] flex items-center justify-center p-4"
+            onClick={() => setCopyImportUrlProfile(null)}
+          >
+            <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md animate-overlay-in" />
+            <div
+              className="relative bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-sm w-full p-6 z-10 ring-1 ring-black/5 dark:ring-white/10 animate-confirm-in"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                onClick={() => setCopyImportUrlProfile(null)}
+                className="absolute right-4 top-4 shrink-0 rounded-full p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
+                aria-label="关闭"
+              >
+                <CloseIcon className="h-5 w-5" />
+              </button>
+
+              <h3 className="mb-3 pr-8 flex items-start gap-2.5 text-base font-bold text-gray-800 dark:text-gray-100 leading-snug">
+                <CopyIcon className="h-5 w-5 shrink-0 text-blue-500 mt-0.5" />
+                <span>复制导入配置「{copyImportUrlProfile.name}」的 URL</span>
+              </h3>
+              <div className="text-[13px] text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
+                是否包含 API Key？如果选择「不包含」，可额外配置是否使用 New API 变量。
+              </div>
+
+              {!copyImportUrlOptions.includeApiKey && (
+                <div className="mb-6 rounded-2xl bg-gray-50/80 p-4 dark:bg-white/[0.03] ring-1 ring-black/5 dark:ring-white/5">
+                  <div className="text-[13px] font-bold text-gray-700 dark:text-gray-300 mb-3.5">New API 变量配置</div>
+                  <div className="space-y-3">
+                    <Checkbox
+                      checked={copyImportUrlOptions.useNewApiAddress}
+                      onChange={(checked) => updateCopyImportUrlOptions({ useNewApiAddress: checked })}
+                      label={<>使用 <code className="mx-0.5 rounded bg-gray-100 px-1.5 py-0.5 text-[0.85em] font-mono text-gray-700 dark:bg-white/[0.08] dark:text-gray-200">{"{address}"}</code> (不含 /v1)</>}
+                    />
+                    <Checkbox
+                      checked={copyImportUrlOptions.useNewApiKey}
+                      onChange={(checked) => updateCopyImportUrlOptions({ useNewApiKey: checked })}
+                      label={<>使用 <code className="mx-0.5 rounded bg-gray-100 px-1.5 py-0.5 text-[0.85em] font-mono text-gray-700 dark:bg-white/[0.08] dark:text-gray-200">{"{key}"}</code></>}
+                    />
+                    <Checkbox
+                      checked={copyImportUrlOptions.useNewApiModel}
+                      onChange={(checked) => updateCopyImportUrlOptions({ useNewApiModel: checked })}
+                      label={<>使用 <code className="mx-0.5 rounded bg-gray-100 px-1.5 py-0.5 text-[0.85em] font-mono text-gray-700 dark:bg-white/[0.08] dark:text-gray-200">{"{model}"}</code></>}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    const options = { ...copyImportUrlOptions, includeApiKey: false }
+                    copyProfileImportUrl(copyImportUrlProfile, options)
+                  }}
+                  className="flex-1 py-2 rounded-xl border border-gray-200 dark:border-white/[0.08] text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06] transition"
+                >
+                  不包含
+                </button>
+                <button
+                  onClick={() => {
+                    const options = { ...copyImportUrlOptions, includeApiKey: true }
+                    copyProfileImportUrl(copyImportUrlProfile, options)
+                  }}
+                  className="flex-1 py-2 rounded-xl bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 transition shadow-sm shadow-blue-500/20"
+                >
+                  包含 API Key
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }

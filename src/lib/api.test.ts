@@ -126,6 +126,34 @@ describe('callImageApi', () => {
     )
   })
 
+  it('uses the same-origin API proxy path when API proxy is locked', async () => {
+    vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'true')
+    vi.stubEnv('VITE_API_PROXY_LOCKED', 'true')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      data: [{ b64_json: 'aW1hZ2U=' }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    await callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        apiKey: 'test-key',
+        apiProxy: false,
+        baseUrl: 'http://api.example.com/v1',
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api-proxy/images/generations',
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
   it('does not add cache request headers that require extra CORS allow-list entries', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       data: [{ b64_json: 'aW1hZ2U=' }],

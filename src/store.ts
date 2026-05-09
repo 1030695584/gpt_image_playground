@@ -11,6 +11,7 @@ import type {
 } from './types'
 import { DEFAULT_PARAMS } from './types'
 import { DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
+import { dismissAllTooltips } from './lib/tooltipDismiss'
 import {
   CURRENT_THUMBNAIL_VERSION,
   getAllTasks,
@@ -29,6 +30,7 @@ import {
   storeImage,
 } from './lib/db'
 import { callImageApi } from './lib/api'
+import { IMAGE_FETCH_CORS_HINT } from './lib/imageApiShared'
 import { getFalErrorMessage, getFalQueuedImageResult } from './lib/falAiImageApi'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import { validateMaskMatchesImage } from './lib/canvasImage'
@@ -472,7 +474,10 @@ export const useStore = create<AppState>()(
         })),
       clearMaskDraft: () => set({ maskDraft: null }),
       maskEditorImageId: null,
-      setMaskEditorImageId: (maskEditorImageId) => set({ maskEditorImageId }),
+      setMaskEditorImageId: (maskEditorImageId) => {
+        if (maskEditorImageId) dismissAllTooltips()
+        set({ maskEditorImageId })
+      },
 
       // Params
       params: { ...DEFAULT_PARAMS },
@@ -517,13 +522,21 @@ export const useStore = create<AppState>()(
 
       // UI
       detailTaskId: null,
-      setDetailTaskId: (detailTaskId) => set({ detailTaskId }),
+      setDetailTaskId: (detailTaskId) => {
+        if (detailTaskId) dismissAllTooltips()
+        set({ detailTaskId })
+      },
       lightboxImageId: null,
       lightboxImageList: [],
-      setLightboxImageId: (lightboxImageId, list) =>
-        set({ lightboxImageId, lightboxImageList: list ?? (lightboxImageId ? [lightboxImageId] : []) }),
+      setLightboxImageId: (lightboxImageId, list) => {
+        if (lightboxImageId) dismissAllTooltips()
+        set({ lightboxImageId, lightboxImageList: list ?? (lightboxImageId ? [lightboxImageId] : []) })
+      },
       showSettings: false,
-      setShowSettings: (showSettings) => set({ showSettings }),
+      setShowSettings: (showSettings) => {
+        if (showSettings) dismissAllTooltips()
+        set({ showSettings })
+      },
 
       // Toast
       toast: null,
@@ -536,7 +549,10 @@ export const useStore = create<AppState>()(
 
       // Confirm
       confirmDialog: null,
-      setConfirmDialog: (confirmDialog) => set({ confirmDialog }),
+      setConfirmDialog: (confirmDialog) => {
+        if (confirmDialog) dismissAllTooltips()
+        set({ confirmDialog })
+      },
     }),
     {
       name: 'gpt-image-playground',
@@ -735,6 +751,25 @@ function isFalConnectionRecoverableError(err: unknown) {
   return /abort|network|failed to fetch|fetch failed|load failed|timeout|连接|断开|中断/i.test(message)
 }
 
+function isApiRequestCorsError(err: unknown): boolean {
+  if (err instanceof TypeError) {
+    const message = err.message.toLowerCase()
+    return /failed to fetch|fetch failed|load failed|networkerror|network request failed/i.test(message)
+  }
+  return false
+}
+
+function getRawErrorPayload(err: unknown): Pick<Partial<TaskRecord>, 'rawImageUrls' | 'rawResponsePayload'> {
+  if (!(err instanceof Error)) return {}
+
+  const rawImageUrls = 'rawImageUrls' in err ? (err as { rawImageUrls?: unknown }).rawImageUrls : undefined
+  const rawResponsePayload = 'rawResponsePayload' in err ? (err as { rawResponsePayload?: unknown }).rawResponsePayload : undefined
+  return {
+    rawImageUrls: Array.isArray(rawImageUrls) && rawImageUrls.length ? rawImageUrls.filter((url): url is string => typeof url === 'string') : undefined,
+    rawResponsePayload: typeof rawResponsePayload === 'string' ? rawResponsePayload : undefined,
+  }
+}
+
 function clearFalRecoveryTimer(taskId: string) {
   const timer = falRecoveryTimers.get(taskId)
   if (timer) clearTimeout(timer)
@@ -875,6 +910,7 @@ async function recoverFalTask(taskId: string) {
     updateTaskInStore(taskId, {
       status: 'error',
       error: getFalErrorMessage(err) ?? (err instanceof Error ? err.message : String(err)),
+      ...getRawErrorPayload(err),
       falRecoverable: false,
       finishedAt: Date.now(),
       elapsed: Date.now() - task.createdAt,
@@ -1179,6 +1215,7 @@ async function executeTask(taskId: string) {
     clearOpenAIWatchdogTimer(taskId)
     updateTaskInStore(taskId, {
       outputImages: outputIds,
+      rawImageUrls: result.rawImageUrls?.length ? result.rawImageUrls : undefined,
       actualParams,
       actualParamsByImage,
       revisedPromptByImage: revisedPromptByImage && Object.keys(revisedPromptByImage).length > 0 ? revisedPromptByImage : undefined,
@@ -1229,9 +1266,14 @@ async function executeTask(taskId: string) {
       })
       scheduleCustomRecovery(taskId)
     } else {
+      let errorMessage = err instanceof Error ? err.message : String(err)
+      if (isApiRequestCorsError(err) && !errorMessage.includes(IMAGE_FETCH_CORS_HINT)) {
+        errorMessage += '\n提示：接口可能不支持浏览器跨域请求，可开启 API 代理解决。'
+      }
       updateTaskInStore(taskId, {
         status: 'error',
-        error: err instanceof Error ? err.message : String(err),
+        error: errorMessage,
+        ...getRawErrorPayload(err),
         falRecoverable: false,
         customRecoverable: false,
         finishedAt: Date.now(),
@@ -1556,6 +1598,7 @@ async function recoverCustomTask(taskId: string) {
     updateTaskInStore(taskId, {
       status: 'error',
       error: err instanceof Error ? err.message : String(err),
+      ...getRawErrorPayload(err),
       customRecoverable: false,
       finishedAt: Date.now(),
       elapsed: Date.now() - task.createdAt,
