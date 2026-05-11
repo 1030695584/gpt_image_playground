@@ -12,6 +12,7 @@ import type {
 import { DEFAULT_PARAMS } from './types'
 import { DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
+import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
   CURRENT_THUMBNAIL_VERSION,
   getAllTasks,
@@ -52,6 +53,7 @@ const MAX_THUMBNAIL_CACHE_ENTRIES = 80
 const MAX_THUMBNAIL_BACKFILL_CONCURRENT = 4
 const FAL_RECOVERY_POLL_MS = 10_000
 const CUSTOM_RECOVERY_POLL_MS = 10_000
+const SUPPORT_PROMPT_IMAGE_THRESHOLD = 50
 const falRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const customRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const openAIWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -261,6 +263,49 @@ function orderImagesWithMaskFirst(images: InputImage[], maskTargetImageId: strin
   return next
 }
 
+function countSuccessfulOutputImages(tasks: TaskRecord[]) {
+  return tasks.reduce((count, task) => count + (task.status === 'done' ? task.outputImages.length : 0), 0)
+}
+
+function skipSupportPromptForImportedData(tasks: TaskRecord[]) {
+  const count = countSuccessfulOutputImages(tasks)
+  useStore.setState((state) => {
+    if (state.supportPromptDismissed) return {}
+    if (count <= SUPPORT_PROMPT_IMAGE_THRESHOLD) {
+      return { supportPromptSkippedForImportedData: false }
+    }
+    if (state.supportPromptOpen) return {}
+    return { supportPromptSkippedForImportedData: true }
+  })
+}
+
+function showSupportPromptForExistingLocalData(tasks: TaskRecord[]) {
+  const count = countSuccessfulOutputImages(tasks)
+  useStore.setState((state) => {
+    if (state.supportPromptDismissed || state.supportPromptOpen) return {}
+    if (count <= SUPPORT_PROMPT_IMAGE_THRESHOLD) {
+      return { supportPromptSkippedForImportedData: false }
+    }
+    if (state.supportPromptSkippedForImportedData) return {}
+    return { supportPromptOpen: true }
+  })
+}
+
+function maybeOpenSupportPrompt(previousTasks: TaskRecord[], nextTasks: TaskRecord[], taskId: string) {
+  const state = useStore.getState()
+  if (state.supportPromptDismissed || state.supportPromptOpen || state.supportPromptSkippedForImportedData) return
+
+  const previousTask = previousTasks.find((task) => task.id === taskId)
+  const nextTask = nextTasks.find((task) => task.id === taskId)
+  if (!nextTask || previousTask?.status === 'done' || nextTask.status !== 'done' || nextTask.outputImages.length === 0) return
+
+  const previousCount = countSuccessfulOutputImages(previousTasks)
+  const nextCount = countSuccessfulOutputImages(nextTasks)
+  if (previousCount <= SUPPORT_PROMPT_IMAGE_THRESHOLD && nextCount > SUPPORT_PROMPT_IMAGE_THRESHOLD) {
+    useStore.setState({ supportPromptOpen: true })
+  }
+}
+
 export function getPersistedState(state: AppState) {
   const settings = normalizeSettings(state.settings)
   return {
@@ -273,6 +318,9 @@ export function getPersistedState(state: AppState) {
         }
       : {}),
     dismissedCodexCliPrompts: state.dismissedCodexCliPrompts,
+    supportPromptDismissed: state.supportPromptDismissed,
+    supportPromptOpen: state.supportPromptOpen,
+    supportPromptSkippedForImportedData: state.supportPromptSkippedForImportedData,
   }
 }
 
@@ -285,6 +333,9 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     ...currentState,
     ...persisted,
     settings,
+    supportPromptDismissed: Boolean(persisted.supportPromptDismissed),
+    supportPromptOpen: Boolean(persisted.supportPromptOpen),
+    supportPromptSkippedForImportedData: Boolean(persisted.supportPromptSkippedForImportedData),
     prompt: settings.persistInputOnRestart && typeof persisted.prompt === 'string' ? persisted.prompt : '',
     inputImages: settings.persistInputOnRestart && Array.isArray(persisted.inputImages) ? persisted.inputImages : [],
   }
@@ -306,7 +357,7 @@ interface AppState {
   addInputImage: (img: InputImage) => void
   removeInputImage: (idx: number) => void
   clearInputImages: () => void
-  setInputImages: (imgs: InputImage[]) => void
+  setInputImages: (imgs: InputImage[], options?: { equivalentImageIds?: Record<string, string> }) => void
   moveInputImage: (fromIdx: number, toIdx: number) => void
   maskDraft: MaskDraft | null
   setMaskDraft: (draft: MaskDraft | null) => void
@@ -348,6 +399,11 @@ interface AppState {
   setLightboxImageId: (id: string | null, list?: string[]) => void
   showSettings: boolean
   setShowSettings: (v: boolean) => void
+  supportPromptOpen: boolean
+  supportPromptDismissed: boolean
+  supportPromptSkippedForImportedData: boolean
+  setSupportPromptOpen: (v: boolean) => void
+  dismissSupportPrompt: () => void
 
   // Toast
   toast: { message: string; type: 'info' | 'success' | 'error' } | null
@@ -431,24 +487,32 @@ export const useStore = create<AppState>()(
       removeInputImage: (idx) =>
         set((s) => {
           const removed = s.inputImages[idx]
+          const inputImages = s.inputImages.filter((_, i) => i !== idx)
           const shouldClearMask = removed?.id === s.maskDraft?.targetImageId
           return {
-            inputImages: s.inputImages.filter((_, i) => i !== idx),
+            inputImages,
+            prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, inputImages),
             ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null } : {}),
           }
         }),
       clearInputImages: () =>
         set((s) => {
           for (const img of s.inputImages) imageCache.delete(img.id)
-          return { inputImages: [], maskDraft: null, maskEditorImageId: null }
+          return {
+            inputImages: [],
+            prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, []),
+            maskDraft: null,
+            maskEditorImageId: null,
+          }
         }),
-      setInputImages: (imgs) =>
+      setInputImages: (imgs, options) =>
         set((s) => {
           const inputImages = orderImagesWithMaskFirst(imgs, s.maskDraft?.targetImageId)
           const shouldClearMask =
             Boolean(s.maskDraft) && !inputImages.some((img) => img.id === s.maskDraft?.targetImageId)
           return {
             inputImages,
+            prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, inputImages, options?.equivalentImageIds),
             ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null } : {}),
           }
         }),
@@ -464,14 +528,21 @@ export const useStore = create<AppState>()(
           if (insertIdx === fromIdx) return s
           const [moved] = images.splice(fromIdx, 1)
           images.splice(insertIdx, 0, moved)
-          return { inputImages: images }
+          return {
+            inputImages: images,
+            prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, images),
+          }
         }),
       maskDraft: null,
       setMaskDraft: (maskDraft) =>
-        set((s) => ({
-          maskDraft,
-          inputImages: orderImagesWithMaskFirst(s.inputImages, maskDraft?.targetImageId),
-        })),
+        set((s) => {
+          const inputImages = orderImagesWithMaskFirst(s.inputImages, maskDraft?.targetImageId)
+          return {
+            maskDraft,
+            inputImages,
+            prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, inputImages),
+          }
+        }),
       clearMaskDraft: () => set({ maskDraft: null }),
       maskEditorImageId: null,
       setMaskEditorImageId: (maskEditorImageId) => {
@@ -493,7 +564,12 @@ export const useStore = create<AppState>()(
 
       // Tasks
       tasks: [],
-      setTasks: (tasks) => set({ tasks }),
+      setTasks: (tasks) => set(() => ({
+        tasks,
+        ...(countSuccessfulOutputImages(tasks) <= SUPPORT_PROMPT_IMAGE_THRESHOLD
+          ? { supportPromptSkippedForImportedData: false }
+          : {}),
+      })),
 
       // Search & Filter
       searchQuery: '',
@@ -537,6 +613,11 @@ export const useStore = create<AppState>()(
         if (showSettings) dismissAllTooltips()
         set({ showSettings })
       },
+      supportPromptOpen: false,
+      supportPromptDismissed: false,
+      supportPromptSkippedForImportedData: false,
+      setSupportPromptOpen: (supportPromptOpen) => set({ supportPromptOpen }),
+      dismissSupportPrompt: () => set({ supportPromptOpen: false, supportPromptDismissed: true }),
 
       // Toast
       toast: null,
@@ -949,6 +1030,7 @@ export async function initStore() {
   const { tasks, interruptedTasks } = markInterruptedOpenAIRunningTasks(storedTasks)
   await Promise.all(interruptedTasks.map((task) => putTask(task)))
   useStore.getState().setTasks(tasks)
+  showSupportPromptForExistingLocalData(tasks)
   for (const task of tasks) {
     if (
       task.apiProvider === 'fal' &&
@@ -1173,7 +1255,7 @@ async function executeTask(taskId: string) {
 
     const result = await callImageApi({
       settings: requestSettings,
-      prompt: task.prompt,
+      prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
       params: task.params,
       inputImageDataUrls: inputDataUrls,
       maskDataUrl,
@@ -1321,6 +1403,7 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
     t.id === taskId ? { ...t, ...patch } : t,
   )
   setTasks(updated)
+  maybeOpenSupportPrompt(tasks, updated, taskId)
   const task = updated.find((t) => t.id === taskId)
   if (task) putTask(task)
 }
@@ -1368,13 +1451,13 @@ export async function reuseConfig(task: TaskRecord) {
   const taskProfileName = matchedProfile?.name ?? getTaskApiProfileName(task)
   const paramsSettings = shouldTemporarilyReuseProfile && matchedProfile ? createSettingsForApiProfile(normalizedSettings, matchedProfile) : normalizedSettings
 
-  setPrompt(task.prompt)
   setParams(normalizeParamsForSettings(task.params, paramsSettings, { hasInputImages: task.inputImageIds.length > 0 }))
   setReusedTaskApiProfile(
     shouldTemporarilyReuseProfile && matchedProfile ? matchedProfile.id : null,
     missingReusedProfile,
     taskProfileName,
   )
+  clearMaskDraft()
 
   // 恢复输入图片
   const imgs: InputImage[] = []
@@ -1385,6 +1468,7 @@ export async function reuseConfig(task: TaskRecord) {
     }
   }
   setInputImages(imgs)
+  setPrompt(task.prompt)
   const maskTargetImageId = task.maskTargetImageId ?? (task.maskImageId ? task.inputImageIds[0] : null)
   if (maskTargetImageId && task.maskImageId && imgs.some((img) => img.id === maskTargetImageId)) {
     const maskDataUrl = await ensureImageCached(task.maskImageId)
@@ -1543,12 +1627,13 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
     thumbnailCache.clear()
     thumbnailBackfillIds.clear()
     setTasks([])
+    useStore.setState({ supportPromptOpen: false, supportPromptSkippedForImportedData: false })
     clearInputImages()
     clearMaskDraft()
   }
 
   if (options.clearConfig) {
-    useStore.setState({ dismissedCodexCliPrompts: [] })
+    useStore.setState({ dismissedCodexCliPrompts: [], supportPromptDismissed: false })
     setSettings({ ...DEFAULT_SETTINGS })
     setParams({ ...DEFAULT_PARAMS })
   }
@@ -1802,6 +1887,7 @@ export async function importData(file: File, options: ImportOptions = { importCo
 
       const tasks = await getAllTasks()
       useStore.getState().setTasks(tasks)
+      skipSupportPromptForImportedData(tasks)
       scheduleThumbnailBackfill(importedImageIds)
     }
 

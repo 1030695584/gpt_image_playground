@@ -82,6 +82,7 @@ export interface AppSettings {
   persistInputOnRestart: boolean
   reuseTaskApiProfileTemporarily: boolean
   alwaysShowRetryButton: boolean
+  enterSubmit: boolean
   profiles: ApiProfile[]
   activeProfileId: string
 }
