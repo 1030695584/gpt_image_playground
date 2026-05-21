@@ -619,6 +619,7 @@ interface AppState {
   setPrompt: (p: string) => void
   inputImages: InputImage[]
   addInputImage: (img: InputImage) => void
+  replaceInputImage: (idx: number, img: InputImage) => void
   removeInputImage: (idx: number) => void
   clearInputImages: () => void
   setInputImages: (imgs: InputImage[], options?: { equivalentImageIds?: Record<string, string> }) => void
@@ -714,14 +715,58 @@ interface AppState {
     confirmText?: string
     cancelText?: string
     showCancel?: boolean
+    buttons?: Array<{
+      label: string
+      tone?: 'primary' | 'secondary' | 'danger' | 'warning'
+      action: (checkboxChecked?: boolean) => void
+    }>
     icon?: 'info' | 'copy'
     minConfirmDelayMs?: number
     messageAlign?: 'left' | 'center'
     tone?: 'danger' | 'warning'
-    action: (checkboxChecked?: boolean) => void
-    cancelAction?: () => void
+    action?: (checkboxChecked?: boolean) => void
+    cancelAction?: (checkboxChecked?: boolean) => void
   } | null
   setConfirmDialog: (d: AppState['confirmDialog']) => void
+}
+
+function isImageReferencedByState(state: AppState, imageId: string) {
+  if (state.inputImages.some((img) => img.id === imageId)) return true
+  if (state.galleryInputDraft?.inputImages.some((img) => img.id === imageId)) return true
+  if (Object.values(state.agentInputDrafts).some((draft) => draft.inputImages.some((img) => img.id === imageId))) return true
+  if (state.tasks.some((task) =>
+    task.inputImageIds.includes(imageId) ||
+    task.outputImages.includes(imageId) ||
+    task.streamPartialImageIds?.includes(imageId) ||
+    task.maskTargetImageId === imageId ||
+    task.maskImageId === imageId
+  )) return true
+  return state.agentConversations.some((conversation) =>
+    conversation.rounds.some((round) =>
+      round.inputImageIds.includes(imageId) ||
+      round.maskTargetImageId === imageId ||
+      round.maskImageId === imageId
+    ) ||
+    conversation.messages.some((message) =>
+      message.inputImageIds?.includes(imageId) ||
+      message.maskTargetImageId === imageId ||
+      message.maskImageId === imageId
+    ),
+  )
+}
+
+export async function deleteImageIfUnreferenced(imageId: string) {
+  imageCache.delete(imageId)
+  thumbnailCache.delete(imageId)
+  thumbnailBackfillIds.delete(imageId)
+  thumbnailBackfillRunningIds.delete(imageId)
+  thumbnailSubscribers.delete(imageId)
+  if (isImageReferencedByState(useStore.getState(), imageId)) return
+  try {
+    await deleteImage(imageId)
+  } catch {
+    // 清理是内存/存储优化，失败不影响替换结果。
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1016,6 +1061,24 @@ export const useStore = create<AppState>()(
           if (s.inputImages.find((i) => i.id === img.id)) return s
           return syncActiveInputDraft(s, { inputImages: [...s.inputImages, img] })
         }),
+      replaceInputImage: (idx, img) => {
+        let removedImageId: string | null = null
+        set((s) => {
+          if (idx < 0 || idx >= s.inputImages.length) return s
+          const previous = s.inputImages[idx]
+          if (!previous || previous.id === img.id) return s
+          if (s.inputImages.some((item, itemIdx) => itemIdx !== idx && item.id === img.id)) return s
+          removedImageId = previous.id
+          const inputImages = s.inputImages.map((item, itemIdx) => itemIdx === idx ? img : item)
+          const shouldClearMask = previous.id === s.maskDraft?.targetImageId
+          return syncActiveInputDraft(s, {
+            inputImages,
+            prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, inputImages, { [previous.id]: img.id }),
+            ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null } : {}),
+          })
+        })
+        if (removedImageId) void deleteImageIfUnreferenced(removedImageId)
+      },
       removeInputImage: (idx) =>
         set((s) => {
           const removed = s.inputImages[idx]
@@ -4156,11 +4219,17 @@ export async function importData(file: File, options: ImportOptions = { importCo
 
 /** 添加图片到输入（文件上传） */
 export async function addImageFromFile(file: File): Promise<void> {
-  if (!file.type.startsWith('image/')) return
+  const image = await createInputImageFromFile(file)
+  if (!image) return
+  useStore.getState().addInputImage(image)
+}
+
+export async function createInputImageFromFile(file: File): Promise<InputImage | null> {
+  if (!file.type.startsWith('image/')) return null
   const dataUrl = await fileToDataUrl(file)
   const id = await storeImage(dataUrl, 'upload')
   cacheImage(id, dataUrl)
-  useStore.getState().addInputImage({ id, dataUrl })
+  return { id, dataUrl }
 }
 
 /** 添加图片到输入（右键菜单）—— 支持 data/blob/http URL */

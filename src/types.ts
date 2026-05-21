@@ -2,6 +2,7 @@
 
 export type ApiMode = 'images' | 'responses'
 export type AppMode = 'gallery' | 'agent'
+export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 export type BuiltInApiProvider = 'openai' | 'fal'
 export type ApiProvider = BuiltInApiProvider | string
 export type CustomProviderTemplate = 'http-image'
@@ -90,6 +91,7 @@ export interface AppSettings {
   reuseTaskApiProfileTemporarily: boolean
   alwaysShowRetryButton: boolean
   enterSubmit: boolean
+  referenceImageEditAction: ReferenceImageEditAction
   agentScrollToBottomAfterSubmit: boolean
   agentMaxToolRounds: number
   agentWebSearch: boolean
