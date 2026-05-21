@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useStore } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import { Checkbox } from './Checkbox'
 import { CopyIcon } from './icons'
 
 function renderMessage(message: string) {
@@ -30,6 +31,7 @@ export default function ConfirmDialog() {
   const confirmDialog = useStore((s) => s.confirmDialog)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const [canConfirm, setCanConfirm] = useState(true)
+  const [checkboxChecked, setCheckboxChecked] = useState(false)
 
   useEffect(() => {
     const delay = confirmDialog?.minConfirmDelayMs ?? 0
@@ -41,6 +43,10 @@ export default function ConfirmDialog() {
     setCanConfirm(false)
     const timer = window.setTimeout(() => setCanConfirm(true), delay)
     return () => window.clearTimeout(timer)
+  }, [confirmDialog])
+
+  useEffect(() => {
+    setCheckboxChecked(confirmDialog?.checkbox?.defaultChecked ?? false)
   }, [confirmDialog])
 
   const handleClose = () => {
@@ -92,9 +98,19 @@ export default function ConfirmDialog() {
           )}
           {confirmDialog.title}
         </h3>
-        <p className={`text-sm text-gray-500 dark:text-gray-400 mb-6 leading-relaxed whitespace-pre-line ${confirmDialog.messageAlign === 'center' ? 'text-center' : ''}`}>
+        <p className={`text-sm text-gray-500 dark:text-gray-400 ${confirmDialog.checkbox ? 'mb-4' : 'mb-6'} leading-relaxed whitespace-pre-line ${confirmDialog.messageAlign === 'center' ? 'text-center' : ''}`}>
           {renderMessage(confirmDialog.message)}
         </p>
+        {confirmDialog.checkbox && (
+          <Checkbox
+            checked={checkboxChecked}
+            onChange={setCheckboxChecked}
+            label={confirmDialog.checkbox.label}
+            tone={confirmDialog.checkbox.tone}
+            disabled={confirmDialog.checkbox.disabled}
+            className="mb-6"
+          />
+        )}
         <div className="flex gap-2">
           {confirmDialog.showCancel !== false && (
             <button
@@ -107,7 +123,7 @@ export default function ConfirmDialog() {
           <button
             onClick={() => {
               if (!canConfirm) return
-              confirmDialog.action()
+              confirmDialog.action(checkboxChecked)
               setConfirmDialog(null)
             }}
             disabled={!canConfirm}
