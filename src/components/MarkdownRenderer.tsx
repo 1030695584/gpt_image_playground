@@ -1,11 +1,25 @@
-import { memo } from 'react'
-import { Streamdown, type Components, type StreamdownTranslations } from 'streamdown'
+import { memo, useEffect, useState } from 'react'
+import type { Components, StreamdownTranslations } from 'streamdown'
+import type { Components as ReactMarkdownComponents } from 'react-markdown'
 
 type MarkdownRendererProps = {
   content: string
   streaming?: boolean
   className?: string
 }
+
+type StreamdownComponent = typeof import('streamdown')['Streamdown']
+type ReactMarkdownComponent = typeof import('react-markdown')['default']
+type RemarkGfmPlugin = typeof import('remark-gfm')['default']
+type LegacyMarkdownModule = {
+  ReactMarkdown: ReactMarkdownComponent
+  remarkGfm: RemarkGfmPlugin
+}
+type MarkdownRendererState =
+  | { type: 'loading' }
+  | { type: 'modern'; Component: StreamdownComponent }
+  | { type: 'legacy'; module: LegacyMarkdownModule }
+  | { type: 'plain' }
 
 const allowedUrlProtocols = new Set(['http:', 'https:', 'mailto:', 'tel:'])
 
@@ -25,6 +39,23 @@ const markdownComponents: Components = {
       <a
         {...props}
         href={href}
+        rel={shouldOpenBlank ? 'noreferrer' : undefined}
+        target={shouldOpenBlank ? '_blank' : undefined}
+      >
+        {children}
+      </a>
+    )
+  },
+}
+
+const legacyMarkdownComponents: ReactMarkdownComponents = {
+  a({ children, href, ...props }) {
+    const safeHref = safeUrl(href ?? '')
+    const shouldOpenBlank = safeHref !== '#blocked'
+    return (
+      <a
+        {...props}
+        href={safeHref}
         rel={shouldOpenBlank ? 'noreferrer' : undefined}
         target={shouldOpenBlank ? '_blank' : undefined}
       >
@@ -57,13 +88,102 @@ const translations: Partial<StreamdownTranslations> = {
   viewFullscreen: '全屏查看',
 }
 
+const canLoadStreamdown = (() => {
+  try {
+    new RegExp('(?<=a)b')
+    return typeof (Array.prototype as { at?: unknown }).at === 'function'
+  } catch {
+    return false
+  }
+})()
+
+let streamdownPromise: Promise<MarkdownRendererState> | null = null
+let legacyMarkdownPromise: Promise<MarkdownRendererState> | null = null
+
+function loadLegacyMarkdown() {
+  legacyMarkdownPromise ??= Promise.all([import('react-markdown'), import('remark-gfm')])
+    .then(([reactMarkdown, remarkGfm]) => ({
+      type: 'legacy' as const,
+      module: {
+        ReactMarkdown: reactMarkdown.default,
+        remarkGfm: remarkGfm.default,
+      },
+    }))
+    .catch((error) => {
+      console.error('Legacy markdown renderer failed to load:', error)
+      return { type: 'plain' as const }
+    })
+
+  return legacyMarkdownPromise
+}
+
+function loadMarkdownRenderer() {
+  if (!canLoadStreamdown) return loadLegacyMarkdown()
+
+  streamdownPromise ??= import('streamdown')
+    .then((module) => ({ type: 'modern' as const, Component: module.Streamdown }))
+    .catch((error) => {
+      console.error('Streamdown failed to load:', error)
+      return loadLegacyMarkdown()
+    })
+
+  return streamdownPromise
+}
+
+function PlainTextMarkdown({ content, className = '' }: MarkdownRendererProps) {
+  return (
+    <div
+      className={`markdown-renderer ${className}`.trim()}
+      dir="auto"
+      style={{ whiteSpace: 'pre-wrap' }}
+    >
+      {content}
+    </div>
+  )
+}
+
 const MarkdownRenderer = memo(function MarkdownRenderer({
   content,
   streaming = false,
   className = '',
 }: MarkdownRendererProps) {
+  const [renderer, setRenderer] = useState<MarkdownRendererState>({ type: 'loading' })
+
+  useEffect(() => {
+    let disposed = false
+
+    loadMarkdownRenderer().then((nextRenderer) => {
+      if (!disposed) setRenderer(nextRenderer)
+    })
+
+    return () => {
+      disposed = true
+    }
+  }, [])
+
+  if (renderer.type === 'legacy') {
+    const { ReactMarkdown, remarkGfm } = renderer.module
+    return (
+      <div className={`markdown-renderer ${className}`.trim()} dir="auto">
+        <ReactMarkdown
+          components={legacyMarkdownComponents}
+          remarkPlugins={[remarkGfm]}
+          urlTransform={safeUrl}
+        >
+          {content}
+        </ReactMarkdown>
+      </div>
+    )
+  }
+
+  if (renderer.type !== 'modern') {
+    return <PlainTextMarkdown content={content} className={className} />
+  }
+
+  const StreamdownComponent = renderer.Component
+
   return (
-    <Streamdown
+    <StreamdownComponent
       className={`markdown-renderer ${className}`.trim()}
       components={markdownComponents}
       controls={{
@@ -81,7 +201,7 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
       urlTransform={safeUrl}
     >
       {content}
-    </Streamdown>
+    </StreamdownComponent>
   )
 })
 
