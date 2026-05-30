@@ -10,6 +10,7 @@ import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { downloadImageIds } from '../lib/downloadImages'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
+import { replaceImageMentionsForApi } from '../lib/promptImageMentions'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
 
 import ViewportTooltip from './ViewportTooltip'
@@ -208,7 +209,10 @@ export default function DetailModal() {
   const currentImageSize = currentOutputImageId ? imageSizes[currentOutputImageId] : ''
   const currentActualParams = currentOutputImageId ? task.actualParamsByImage?.[currentOutputImageId] : undefined
   const currentRevisedPrompt = currentOutputImageId ? task.revisedPromptByImage?.[currentOutputImageId]?.trim() : ''
-  const showRevisedPrompt = Boolean(currentRevisedPrompt && currentRevisedPrompt !== task.prompt.trim())
+  // 将 @图N 等 mention 标记转换为实际发送给 API 的形式（如 [image 1]）后再比较，
+  // 这样仅由标签渲染差异导致的不一致不会被当作“被改写”。
+  const promptSentToApi = replaceImageMentionsForApi(task.prompt, task.inputImageIds.length).trim()
+  const showRevisedPrompt = Boolean(currentRevisedPrompt && currentRevisedPrompt !== promptSentToApi)
   const codexCliPromptKey = getCodexCliPromptKey(settings)
   const hasHandledPromptWarning = settings.codexCli || dismissedCodexCliPrompts.includes(codexCliPromptKey)
   const taskProvider = task.apiProvider
