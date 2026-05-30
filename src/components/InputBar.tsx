@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, updateTaskInStore, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds } from '../store'
-import { DEFAULT_PARAMS } from '../types'
+import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteCollectionIds, useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds } from '../store'
+import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import { getActiveApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
@@ -11,7 +11,8 @@ import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { getSafeBoundingClientRect } from '../lib/domRect'
 import { collectAgentRoundOutputImageSlots } from '../lib/agentImageReferences'
 import { useHintTooltip } from '../hooks/useHintTooltip'
-import { downloadImageIds, formatExportFileTime } from '../lib/downloadImages'
+import { useTooltip } from '../hooks/useTooltip'
+import { downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime } from '../lib/downloadImages'
 import Select from './Select'
 import SizePickerModal from './SizePickerModal'
 import ViewportTooltip from './ViewportTooltip'
@@ -334,8 +335,65 @@ function ButtonTooltip({ visible, text }: { visible: boolean; text: ReactNode })
   )
 }
 
+function BatchActionButton({
+  tooltip,
+  className,
+  onClick,
+  children,
+}: {
+  tooltip: string
+  className: string
+  onClick: () => void | Promise<void>
+  children: ReactNode
+}) {
+  const tooltipState = useTooltip()
+
+  return (
+    <span className="relative inline-flex" {...tooltipState.handlers}>
+      <button
+        type="button"
+        onClick={() => {
+          tooltipState.dismiss()
+          void onClick()
+        }}
+        className={className}
+        aria-label={tooltip}
+      >
+        {children}
+      </button>
+      <ViewportTooltip visible={tooltipState.visible} className="whitespace-nowrap">
+        {tooltip}
+      </ViewportTooltip>
+    </span>
+  )
+}
+
 /** API 支持的最大参考图数量 */
 const API_MAX_IMAGES = 16
+
+function getFavoriteCollectionTasksForBatch(collectionId: string, tasks: TaskRecord[]) {
+  const favoriteTasks = tasks.filter((task) => task.isFavorite)
+  if (collectionId === ALL_FAVORITES_COLLECTION_ID) return favoriteTasks
+  return favoriteTasks.filter((task) => getTaskFavoriteCollectionIds(task).includes(collectionId))
+}
+
+function getTaskOutputImageZipEntries(tasks: TaskRecord[]) {
+  return [...tasks]
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .flatMap((task) => {
+      const outputImages = task.outputImages || []
+      return outputImages.map((imageId, index) => ({
+        imageId,
+        fileNameBase: outputImages.length > 1
+          ? `task-${task.id}-${String(index + 1).padStart(2, '0')}`
+          : `task-${task.id}`,
+      }))
+    })
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 640)
@@ -405,11 +463,17 @@ export default function InputBar() {
   const selectedTaskIds = useStore((s) => s.selectedTaskIds)
   const setSelectedTaskIds = useStore((s) => s.setSelectedTaskIds)
   const clearSelection = useStore((s) => s.clearSelection)
+  const selectedFavoriteCollectionIds = useStore((s) => s.selectedFavoriteCollectionIds)
+  const setSelectedFavoriteCollectionIds = useStore((s) => s.setSelectedFavoriteCollectionIds)
+  const clearFavoriteCollectionSelection = useStore((s) => s.clearFavoriteCollectionSelection)
   const tasks = useStore((s) => s.tasks)
+  const favoriteCollections = useStore((s) => s.favoriteCollections)
   const agentConversations = useStore((s) => s.agentConversations)
   const activeAgentConversationId = useStore((s) => s.activeAgentConversationId)
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
+  const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
+  const openFavoritePicker = useStore((s) => s.openFavoritePicker)
   const searchQuery = useStore((s) => s.searchQuery)
 
   const filteredTasks = useMemo(() => {
@@ -417,7 +481,10 @@ export default function InputBar() {
     const q = searchQuery.trim().toLowerCase()
     
     return sorted.filter((t) => {
-      if (filterFavorite && !t.isFavorite) return false
+      if (filterFavorite) {
+        if (!t.isFavorite) return false
+        if (activeFavoriteCollectionId && activeFavoriteCollectionId !== ALL_FAVORITES_COLLECTION_ID && !getTaskFavoriteCollectionIds(t).includes(activeFavoriteCollectionId)) return false
+      }
       const matchStatus = filterStatus === 'all' || t.status === filterStatus
       if (!matchStatus) return false
       
@@ -426,39 +493,72 @@ export default function InputBar() {
       const paramStr = JSON.stringify(t.params).toLowerCase()
       return prompt.includes(q) || paramStr.includes(q)
     })
-  }, [tasks, searchQuery, filterStatus, filterFavorite])
+  }, [tasks, searchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId])
 
-  const handleSelectAllToggle = useCallback(() => {
-    if (selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0) {
-      clearSelection()
-    } else {
-      setSelectedTaskIds(filteredTasks.map((t) => t.id))
-    }
-  }, [selectedTaskIds.length, filteredTasks, clearSelection, setSelectedTaskIds])
+  const inCollectionOverview = filterFavorite && !activeFavoriteCollectionId
+
+  const favoriteCollectionCards = useMemo(() => {
+    return [
+      {
+        id: ALL_FAVORITES_COLLECTION_ID,
+        name: '全部',
+        tasks: getFavoriteCollectionTasksForBatch(ALL_FAVORITES_COLLECTION_ID, tasks),
+      },
+      ...favoriteCollections.map((collection) => ({
+        id: collection.id,
+        name: collection.name,
+        collection,
+        tasks: getFavoriteCollectionTasksForBatch(collection.id, tasks),
+      })),
+    ]
+  }, [favoriteCollections, tasks])
+
+  const filteredFavoriteCollectionCards = useMemo(() => {
+    if (!searchQuery.trim()) return favoriteCollectionCards
+    const lowerQuery = searchQuery.toLowerCase()
+    return favoriteCollectionCards.filter((collection) => collection.name.toLowerCase().includes(lowerQuery))
+  }, [favoriteCollectionCards, searchQuery])
+
+  const handleSelectAllVisibleTasks = useCallback(() => {
+    setSelectedTaskIds(filteredTasks.map((task) => task.id))
+  }, [filteredTasks, setSelectedTaskIds])
+
+  const handleInvertVisibleTasks = useCallback(() => {
+    const visibleIds = new Set(filteredTasks.map((task) => task.id))
+    setSelectedTaskIds((current) => {
+      const currentSet = new Set(current)
+      const next = current.filter((id) => !visibleIds.has(id))
+      filteredTasks.forEach((task) => {
+        if (!currentSet.has(task.id)) next.push(task.id)
+      })
+      return next
+    })
+  }, [filteredTasks, setSelectedTaskIds])
+
+  const handleSelectAllVisibleFavoriteCollections = useCallback(() => {
+    setSelectedFavoriteCollectionIds(filteredFavoriteCollectionCards.map((collection) => collection.id))
+  }, [filteredFavoriteCollectionCards, setSelectedFavoriteCollectionIds])
+
+  const handleInvertVisibleFavoriteCollections = useCallback(() => {
+    const visibleIds = new Set(filteredFavoriteCollectionCards.map((collection) => collection.id))
+    setSelectedFavoriteCollectionIds((current) => {
+      const currentSet = new Set(current)
+      const next = current.filter((id) => !visibleIds.has(id))
+      filteredFavoriteCollectionCards.forEach((collection) => {
+        if (!currentSet.has(collection.id)) next.push(collection.id)
+      })
+      return next
+    })
+  }, [filteredFavoriteCollectionCards, setSelectedFavoriteCollectionIds])
 
   const handleToggleFavorite = useCallback(() => {
-    const selectedTasks = tasks.filter((t) => selectedTaskIds.includes(t.id))
-    const allFavorite = selectedTasks.length > 0 && selectedTasks.every((t) => t.isFavorite)
-    const newFavoriteState = !allFavorite
-    setConfirmDialog({
-      title: newFavoriteState ? '批量收藏' : '批量取消收藏',
-      message: newFavoriteState
-        ? `确定要收藏选中的 ${selectedTaskIds.length} 条记录吗？`
-        : `确定要取消收藏选中的 ${selectedTaskIds.length} 条记录吗？`,
-      confirmText: newFavoriteState ? '确认收藏' : '确认取消',
-      action: () => {
-        selectedTaskIds.forEach((id) => {
-          updateTaskInStore(id, { isFavorite: newFavoriteState })
-        })
-        clearSelection()
-      },
-    })
-  }, [tasks, selectedTaskIds, clearSelection, setConfirmDialog])
+    openFavoritePicker(selectedTaskIds)
+  }, [openFavoritePicker, selectedTaskIds])
 
   const handleDeleteSelected = useCallback(() => {
     setConfirmDialog({
       title: '批量删除',
-      message: `确定要删除选中的 ${selectedTaskIds.length} 条记录吗？`,
+      message: `确定要删除选中的 ${selectedTaskIds.length} 个任务吗？`,
       action: () => {
         removeMultipleTasks(selectedTaskIds)
       },
@@ -469,7 +569,7 @@ export default function InputBar() {
     const selectedTasks = tasks.filter((t) => selectedTaskIds.includes(t.id))
     const imageIds = selectedTasks.flatMap(t => t.outputImages || [])
     if (imageIds.length === 0) {
-      showToast('选中的记录没有图片', 'info')
+      showToast('选中的任务没有图片', 'info')
       return
     }
 
@@ -490,6 +590,80 @@ export default function InputBar() {
     }
     clearSelection()
   }, [tasks, selectedTaskIds, showToast, clearSelection])
+
+  const handleDownloadSelectedFavoriteCollections = useCallback(async () => {
+    const selectedIdSet = new Set(selectedFavoriteCollectionIds)
+    const selectedCollections = favoriteCollectionCards.filter((collection) => selectedIdSet.has(collection.id))
+    if (selectedCollections.length === 0) return
+
+    let successCount = 0
+    let failCount = 0
+    let downloadedCollectionCount = 0
+    const timeStr = formatExportFileTime(new Date())
+
+    try {
+      for (const collection of selectedCollections) {
+        const entries = getTaskOutputImageZipEntries(collection.tasks)
+        if (entries.length === 0) continue
+        const zipName = collection.id === ALL_FAVORITES_COLLECTION_ID
+          ? `favorites-all-${timeStr}`
+          : `favorites-${collection.name}-${timeStr}`
+        const result = await downloadImageEntriesAsZip(entries, zipName)
+        successCount += result.successCount
+        failCount += result.failCount
+        if (result.successCount > 0) downloadedCollectionCount++
+        if (selectedCollections.length > 1) await delay(100)
+      }
+
+      if (successCount === 0) {
+        showToast('选中的收藏夹没有图片', 'info')
+      } else if (failCount > 0) {
+        showToast(`部分下载失败：成功 ${successCount}，失败 ${failCount}`, 'error')
+      } else {
+        showToast(downloadedCollectionCount > 1 ? `下载成功：${downloadedCollectionCount} 个压缩包，${successCount} 张图片` : `下载成功：${successCount} 张图片`, 'success')
+      }
+    } catch (err) {
+      console.error(err)
+      showToast('下载失败', 'error')
+    }
+    clearFavoriteCollectionSelection()
+  }, [clearFavoriteCollectionSelection, favoriteCollectionCards, selectedFavoriteCollectionIds, showToast])
+
+  const handleDeleteSelectedFavoriteCollections = useCallback(() => {
+    const selectedIdSet = new Set(selectedFavoriteCollectionIds)
+    const selectedCollections = favoriteCollections.filter((collection) => selectedIdSet.has(collection.id))
+    if (selectedCollections.length === 0) {
+      showToast('没有可删除的收藏夹', 'info')
+      return
+    }
+    if (favoriteCollections.length - selectedCollections.length < 1) {
+      showToast('至少保留一个收藏夹', 'error')
+      return
+    }
+
+    const selectedCollectionIds = new Set(selectedCollections.map((collection) => collection.id))
+    const imageCount = new Set(
+      tasks
+        .filter((task) => getTaskFavoriteCollectionIds(task).some((id) => selectedCollectionIds.has(id)))
+        .flatMap((task) => task.outputImages || []),
+    ).size
+    setConfirmDialog({
+      title: '批量删除收藏夹',
+      message: `确定要删除选中的 ${selectedCollections.length} 个收藏夹吗？`,
+      checkbox: imageCount > 0
+        ? {
+            label: `同时删除收藏夹中的图片（${imageCount} 张）`,
+            tone: 'danger',
+          }
+        : undefined,
+      action: async (deleteImages = false) => {
+        for (const collection of selectedCollections) {
+          await deleteFavoriteCollection(collection.id, deleteImages)
+        }
+        clearFavoriteCollectionSelection()
+      },
+    })
+  }, [clearFavoriteCollectionSelection, favoriteCollections, selectedFavoriteCollectionIds, setConfirmDialog, showToast, tasks])
 
   const maskDraft = useStore((s) => s.maskDraft)
   const clearMaskDraft = useStore((s) => s.clearMaskDraft)
@@ -1907,6 +2081,9 @@ export default function InputBar() {
     </div>
   )
 
+  const showFavoriteCollectionBatchBar = inCollectionOverview && selectedFavoriteCollectionIds.length > 0
+  const showTaskBatchBar = !showFavoriteCollectionBatchBar && selectedTaskIds.length > 0
+
   return (
     <>
       {/* 全屏拖拽遮罩 */}
@@ -1953,40 +2130,100 @@ export default function InputBar() {
       )}
 
       <div data-input-bar className="fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl px-3 sm:px-4 transition-all duration-300">
-        {selectedTaskIds.length > 0 && (
+        {showFavoriteCollectionBatchBar && (
           <div className="flex justify-center mb-3">
             <div className="bg-white/90 dark:bg-gray-800/90 backdrop-blur shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-lg rounded-full flex items-center p-1 border border-gray-200/50 dark:border-white/10 pointer-events-auto">
-              <button
-                onClick={clearSelection}
+              <BatchActionButton
+                onClick={clearFavoriteCollectionSelection}
                 className="p-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
-                title="取消选择"
+                tooltip="取消选择"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
-              </button>
+              </BatchActionButton>
               <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
-              <button
-                onClick={handleSelectAllToggle}
+              <BatchActionButton
+                onClick={handleSelectAllVisibleFavoriteCollections}
                 className="p-2 text-blue-500 dark:text-blue-400 hover:text-blue-600 dark:hover:text-blue-300 transition-colors"
-                title={selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0 ? "取消全选" : "全选当前可见"}
+                tooltip="全选收藏夹"
               >
-                {selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0 ? (
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                    <path d="M9 12l2 2 4-4" />
-                  </svg>
-                ) : (
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                    <path strokeDasharray="4 4" d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z" />
-                  </svg>
-                )}
-              </button>
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                  <path d="M9 12l2 2 4-4" />
+                </svg>
+              </BatchActionButton>
+              <BatchActionButton
+                onClick={handleInvertVisibleFavoriteCollections}
+                className="p-2 text-purple-500 dark:text-purple-400 hover:text-purple-600 dark:hover:text-purple-300 transition-colors"
+                tooltip="反选收藏夹"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                  <path strokeDasharray="4 4" d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z" />
+                  <path d="M8 12h8M13 9l3 3-3 3" />
+                </svg>
+              </BatchActionButton>
               <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
-              <button
+              <BatchActionButton
+                onClick={handleDownloadSelectedFavoriteCollections}
+                className="p-2 text-green-500 dark:text-green-400 hover:text-green-600 dark:hover:text-green-300 transition-colors"
+                tooltip="下载选中"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+              </BatchActionButton>
+              <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
+              <BatchActionButton
+                onClick={handleDeleteSelectedFavoriteCollections}
+                className="p-2 text-red-500 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors"
+                tooltip="删除选中"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </BatchActionButton>
+            </div>
+          </div>
+        )}
+        {showTaskBatchBar && (
+          <div className="flex justify-center mb-3">
+            <div className="bg-white/90 dark:bg-gray-800/90 backdrop-blur shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-lg rounded-full flex items-center p-1 border border-gray-200/50 dark:border-white/10 pointer-events-auto">
+              <BatchActionButton
+                onClick={clearSelection}
+                className="p-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
+                tooltip="取消选择"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </BatchActionButton>
+              <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
+              <BatchActionButton
+                onClick={handleSelectAllVisibleTasks}
+                className="p-2 text-blue-500 dark:text-blue-400 hover:text-blue-600 dark:hover:text-blue-300 transition-colors"
+                tooltip="全选任务"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                  <path d="M9 12l2 2 4-4" />
+                </svg>
+              </BatchActionButton>
+              <BatchActionButton
+                onClick={handleInvertVisibleTasks}
+                className="p-2 text-purple-500 dark:text-purple-400 hover:text-purple-600 dark:hover:text-purple-300 transition-colors"
+                tooltip="反选任务"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                  <path strokeDasharray="4 4" d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z" />
+                  <path d="M8 12h8M13 9l3 3-3 3" />
+                </svg>
+              </BatchActionButton>
+              <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
+              <BatchActionButton
                 onClick={handleToggleFavorite}
                 className="p-2 text-yellow-500 dark:text-yellow-400 hover:text-yellow-600 dark:hover:text-yellow-300 transition-colors"
-                title="收藏/取消收藏"
+                tooltip="编辑收藏夹"
               >
                 {selectedTaskIds.length > 0 && selectedTaskIds.every((id) => tasks.find((t) => t.id === id)?.isFavorite) ? (
                   <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -1997,27 +2234,27 @@ export default function InputBar() {
                     <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
                   </svg>
                 )}
-              </button>
+              </BatchActionButton>
               <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
-              <button
+              <BatchActionButton
                 onClick={handleDownloadSelected}
                 className="p-2 text-green-500 dark:text-green-400 hover:text-green-600 dark:hover:text-green-300 transition-colors"
-                title="批量下载"
+                tooltip="下载选中"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                 </svg>
-              </button>
+              </BatchActionButton>
               <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
-              <button
+              <BatchActionButton
                 onClick={handleDeleteSelected}
                 className="p-2 text-red-500 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-colors"
-                title="删除选中"
+                tooltip="删除选中"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                 </svg>
-              </button>
+              </BatchActionButton>
             </div>
           </div>
         )}
