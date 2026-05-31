@@ -1182,15 +1182,34 @@ export default function SettingsModal() {
                         value={draft.enterSubmit ? 'enter' : 'ctrl-enter'}
                         onChange={(val) => commitSettings({ ...draft, enterSubmit: val === 'enter' })}
                         options={[
-                          { label: 'Enter', value: 'enter' },
-                          { label: navigator.userAgent.includes('Mac') ? 'Cmd + Enter' : 'Ctrl + Enter', value: 'ctrl-enter' }
+                          { label: navigator.userAgent.includes('Mac') ? '⌘ + Enter' : 'Ctrl + Enter', value: 'ctrl-enter' },
+                          { label: 'Enter', value: 'enter' }
                         ]}
                         className="w-full px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
                       />
                     </div>
                   </div>
                   <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                    选择 Enter 提交时，使用 Shift + Enter 换行；否则直接 Enter 换行。
+                    选择 {navigator.userAgent.includes('Mac') ? '⌘ + Enter' : 'Ctrl + Enter'} 时，Enter 换行；选择 Enter 时，Shift + Enter 换行。
+                  </div>
+                </div>
+                <div className="sm:hidden">
+                  <div className="mb-1 flex items-center justify-between gap-3">
+                    <span className="block text-sm text-gray-600 dark:text-gray-300">任务提交方式</span>
+                    <div className="w-36">
+                      <Select
+                        value={draft.enterSubmit ? 'enter' : 'button'}
+                        onChange={(val) => commitSettings({ ...draft, enterSubmit: val === 'enter' })}
+                        options={[
+                          { label: '发送按钮', value: 'button' },
+                          { label: '回车/发送按钮', value: 'enter' }
+                        ]}
+                        className="w-full px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+                    选择回车/发送按钮时，回车可提交；否则仅使用发送按钮提交。
                   </div>
                 </div>
                 <div className="block">
