@@ -2,12 +2,6 @@ import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiP
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import { appendStreamingFormatHint, maybeAppendStreamingHint, getApiErrorMessage, MIME_MAP, normalizeBase64Image, pickActualParams } from './imageApiShared'
 
-export interface AgentApiMessage {
-  role: 'user' | 'assistant'
-  text: string
-  imageDataUrls?: string[]
-}
-
 export interface AgentApiResultImage {
   toolCallId?: string
   action?: string
