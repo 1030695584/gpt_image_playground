@@ -60,6 +60,12 @@
 </td>
 <td valign="middle"><b><a href="https://api.muteki.site/register?aff=CookSleep&promo=CookSleep">MaruCode</a></b>&nbsp;是一家偶尔做做慈善的小破站 API，自营号池，主要提供 Codex、Claude Code、GPT Image 等主流模型，明码标价(Codex 0.3x, CC 1.5x)，透明汇率(1:1)，<a href="https://api.muteki.site/register?aff=CookSleep&promo=CookSleep">新用户注册送 2 刀</a></td>
 </tr>
+<tr>
+<td width="180" align="center" valign="middle">
+  <a href="https://sui-xiang.com"><img src="https://github.com/user-attachments/assets/fc64d112-c820-4e2e-ad34-728b3b9c9dd8" alt="随想AI网关" width="150"></a>
+</td>
+<td valign="middle"><b><a href="https://sui-xiang.com">随想AI网关</a></b>&nbsp;是一家可靠高效的 API 中继服务提供商，提供 Claude、Codex、Gemini 等的中继服务。注重隐私的中转站·无数据倒卖·无模型掺水，极速售后，99.9% 可用性。新账户注册每日签到就送 0.5 元测试额度，充值 1:1。</td>
+</tr>
 </table>
 
 ---
