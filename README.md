@@ -44,12 +44,6 @@
 </tr>
 <tr>
 <td width="180" align="center" valign="middle">
-  <a href="https://code0.ai/?source=cooksleep"><img src="https://github.com/user-attachments/assets/515dc874-3b2b-4355-aeae-04eba6e6505d" alt="Code0" width="150"></a>
-</td>
-<td valign="middle"><b><a href="https://code0.ai/?source=cooksleep">Code0</a></b>&nbsp;是一家稳定高速的 AI API 中转服务商，支持 gpt-image、Claude Code、Codex 等主流模型，提供即充即用的 AI 生图与编码能力，面向个人、团队与企业用户。<a href="https://gpt-image-playground.cooksleep.dev/?apiUrl=https%3A%2F%2Fcode0.ai%2Fv1&apiMode=images&profileName=Code0">点此导入配置</a></td>
-</tr>
-<tr>
-<td width="180" align="center" valign="middle">
   <a href="https://qiuqiutoken.com"><img src="https://github.com/user-attachments/assets/03fd9d8d-fba0-4643-9d83-47e386267b57" alt="球球Token" width="150"></a>
 </td>
 <td valign="middle"><b><a href="https://qiuqiutoken.com">球球Token</a></b>&nbsp;是一家高速稳定务实的 AI 中转服务站，支持 gpt-image-2、Codex、Claude Code 等主流模型，100% 缓存命中、文档齐备、k8s 高可用集群、多个 CN2 GIA 接入点、售后极速响应、企业开票。</td>
