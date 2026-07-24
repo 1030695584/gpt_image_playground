@@ -72,6 +72,12 @@
 </td>
 <td valign="middle"><b><a href="https://hezu.ink/sign-up?aff=jCQK">合租巴士</a></b>&nbsp;是一家可靠高效 AI 中转服务平台，主要提供 Claude Code、Codex 等主流模型的高稳定中转能力，充值比例透明（1:1），Codex 倍率补贴低至 0.15。<a href="https://hezu.ink/sign-up?aff=jCQK">进群送 3 刀体验金</a></td>
 </tr>
+<tr>
+<td width="180" align="center" valign="middle">
+  <a href="https://api.sublyx.org/register?aff=U62PAZERCHEA"><img src="https://github.com/user-attachments/assets/828b0b12-f07d-4408-a6d7-627056b81b76" alt="Sublyx" width="150"></a>
+</td>
+<td valign="middle"><b><a href="https://api.sublyx.org/register?aff=U62PAZERCHEA">Sublyx</a></b>&nbsp;是一家稳定高效的 AI API 聚合网关，支持 OpenAI、Claude、Grok、Codex、gpt-image-2 等主流模型，兼容 OpenAI SDK、Claude Code、Codex、Cherry Studio 等常用工具。通过<a href="https://api.sublyx.org/register?aff=U62PAZERCHEA">链接注册</a>并使用优惠码 <code>IMG2</code>，可额外领取 10 刀额度。<a href="https://img2.icedit.ai">生图工作台</a></td>
+</tr>
 </table>
 
 ---
@@ -194,7 +200,7 @@
 1. 在 Vercel 项目设置 **Settings -> Git** 的 **Deploy Hooks** 中创建一个名为 `Release` 的 Hook（Branch 填 `main`）并复制生成的 URL。
 2. 在你 Fork 的 GitHub 仓库设置 **Settings -> Secrets and variables -> Actions** 中，新建 Secret `VERCEL_DEPLOY_HOOK`，填入刚才的 URL。
 
-此后，每次在 GitHub 点击 **Sync fork** 同步上游，都会自动触发 Vercel 构建部署最新版。
+此后，每次在 GitHub 点击 **Sync fork** 同步包含新 Release 的上游代码时，都会自动触发 Vercel 构建部署。普通提交不会触发部署。
 
 </details>
 
