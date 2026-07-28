@@ -154,6 +154,32 @@ describe('callAgentResponsesApi', () => {
     expect(body.tools[0].input_image_mask).toEqual({ image_url: 'data:image/png;base64,bWFzaw==' })
   })
 
+  it('requires resolution in Agent prompts and omits the Codex CLI size parameter', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'OK' }] }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    const profile = createDefaultOpenAIProfile({
+      apiKey: 'test-key',
+      apiMode: 'responses',
+      codexCli: true,
+    })
+
+    await callAgentResponsesApi({
+      settings: DEFAULT_SETTINGS,
+      profile,
+      params: { ...DEFAULT_PARAMS, size: '1024x1024' },
+      input: 'prompt',
+    })
+
+    const [, init] = fetchMock.mock.calls[0]
+    const body = JSON.parse(String((init as RequestInit).body))
+    expect(body.tools[0].size).toBeUndefined()
+    expect(body.instructions).toContain('Start every image prompt with exactly "Generate at 1024x1024 resolution." followed by a space.')
+  })
+
   it('extracts image_generation results from base64 object fields', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       output: [{
