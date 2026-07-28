@@ -80,9 +80,9 @@
 </tr>
 <tr>
 <td width="180" align="center" valign="middle">
-  <a href="https://buzzai.cc"><img src="https://github.com/user-attachments/assets/55da4c87-2d2c-4ae6-8577-18aded9bd762" alt="BuzzAI" width="150"></a>
+  <a href="https://buzzai.cc/register?aff=gptimageplayground"><img src="https://github.com/user-attachments/assets/55da4c87-2d2c-4ae6-8577-18aded9bd762" alt="BuzzAI" width="150"></a>
 </td>
-<td valign="middle"><b><a href="https://buzzai.cc">BuzzAI</a></b>&nbsp;默认不保存聊天记录，不替换用户选择的模型。所有调用链路均自主建设与维护——不让你的数据流经任何我们无法负责的环节，也不让你的请求在你看不见的地方被一次次转发。</td>
+<td valign="middle"><b><a href="https://buzzai.cc/register?aff=gptimageplayground">BuzzAI</a></b>&nbsp;默认不保存聊天记录，不替换用户选择的模型。所有调用链路均自主建设与维护——不让你的数据流经任何我们无法负责的环节，也不让你的请求在你看不见的地方被一次次转发。</td>
 </tr>
 </table>
 
