@@ -78,6 +78,12 @@
 </td>
 <td valign="middle"><b><a href="https://api.sublyx.org/register?aff=U62PAZERCHEA">Sublyx</a></b>&nbsp;是一家稳定高效的 AI API 聚合网关，支持 OpenAI、Claude、Grok、Codex、gpt-image-2 等主流模型，兼容 OpenAI SDK、Claude Code、Codex、Cherry Studio 等常用工具。通过<a href="https://api.sublyx.org/register?aff=U62PAZERCHEA">链接注册</a>并使用优惠码 <code>IMG2</code>，可额外领取 10 刀额度。<a href="https://img2.icedit.ai">生图工作台</a></td>
 </tr>
+<tr>
+<td width="180" align="center" valign="middle">
+  <a href="https://buzzai.cc"><img src="https://github.com/user-attachments/assets/55da4c87-2d2c-4ae6-8577-18aded9bd762" alt="BuzzAI" width="150"></a>
+</td>
+<td valign="middle"><b><a href="https://buzzai.cc">BuzzAI</a></b>&nbsp;默认不保存聊天记录，不替换用户选择的模型。所有调用链路均自主建设与维护——不让你的数据流经任何我们无法负责的环节，也不让你的请求在你看不见的地方被一次次转发。</td>
+</tr>
 </table>
 
 ---
