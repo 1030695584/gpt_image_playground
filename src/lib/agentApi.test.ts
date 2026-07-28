@@ -61,6 +61,7 @@ describe('callAgentResponsesApi', () => {
       apiMode: 'responses',
       streamImages: true,
       streamPartialImages: 2,
+      reasoningEffort: 'xhigh',
     })
 
     const result = await callAgentResponsesApi({
@@ -74,6 +75,7 @@ describe('callAgentResponsesApi', () => {
     const [, init] = fetchMock.mock.calls[0]
     const body = JSON.parse(String((init as RequestInit).body))
     expect(body.stream).toBe(true)
+    expect(body.reasoning).toEqual({ effort: 'xhigh' })
     expect(body.tools[0].partial_images).toBe(2)
     expect(textDeltas).toEqual(['Hel', 'lo'])
     expect(result).toMatchObject({
@@ -262,6 +264,7 @@ describe('callAgentResponsesApi', () => {
       apiKey: 'test-key',
       apiMode: 'responses',
       streamImages: true,
+      reasoningEffort: 'max',
     })
 
     const title = await callAgentConversationTitleApi({
@@ -273,6 +276,8 @@ describe('callAgentResponsesApi', () => {
     const [, init] = fetchMock.mock.calls[0]
     const body = JSON.parse(String((init as RequestInit).body))
     expect(body.instructions).toContain('<title>short title</title>')
+    expect(body.reasoning).toEqual({ effort: 'max' })
+    expect(body.max_output_tokens).toBeUndefined()
     expect(body.tools).toBeUndefined()
     expect(body.stream).toBeUndefined()
     expect(body.input[0].content[0].text).toContain('帮我生成一张橘猫头像，要赛博朋克风格')

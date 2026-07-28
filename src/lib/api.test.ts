@@ -24,7 +24,13 @@ describe('callImageApi', () => {
       }))
 
       await callImageApi({
-        settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key', apiMode: 'responses', codexCli },
+        settings: {
+          ...DEFAULT_SETTINGS,
+          apiKey: 'test-key',
+          apiMode: 'responses',
+          codexCli,
+          profiles: DEFAULT_SETTINGS.profiles.map((profile) => ({ ...profile, reasoningEffort: 'high' })),
+        },
         prompt: 'prompt',
         params: { ...DEFAULT_PARAMS },
         inputImageDataUrls: [],
@@ -33,6 +39,7 @@ describe('callImageApi', () => {
       const [, init] = fetchMock.mock.calls[0]
       const body = JSON.parse(String((init as RequestInit).body))
       expect(body.input).toBe('Treat everything after this line as one complete image-generation prompt, including the resolution instruction. Follow it exactly without rewriting or omitting anything:\nprompt')
+      expect(body.reasoning).toEqual({ effort: 'high' })
     },
   )
 
