@@ -31,10 +31,13 @@ import {
   getPresetProfileIds,
   isPresetConfigDeletionPrevented,
   isPresetConfigOnlyEnabled,
+  isPresetProvider,
+  isPresetProviderDeletionPrevented,
   isPresetProfileLocked,
   isPresetProviderLocked,
 } from '../lib/presetConfig'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
+import { createCustomProfileImportUrl } from '../lib/profileImportUrl'
 import { requestBrowserNotificationPermission, type BrowserNotificationPermissionResult } from '../lib/browserNotification'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, REASONING_EFFORT_VALUES, type AgentApiConfigMode, type ApiProfile, type AppSettings, type CustomProviderDefinition, type ReasoningEffort, type ZipDownloadRoute } from '../types'
 import {
@@ -151,6 +154,8 @@ export default function SettingsModal() {
   const settings = useStore((s) => s.settings)
   const setSettings = useStore((s) => s.setSettings)
   const dismissPresetProfile = useStore((s) => s.dismissPresetProfile)
+  const dismissPresetProvider = useStore((s) => s.dismissPresetProvider)
+  const restorePresetProvider = useStore((s) => s.restorePresetProvider)
   const reusedTaskApiProfileId = useStore((s) => s.reusedTaskApiProfileId)
   const setReusedTaskApiProfile = useStore((s) => s.setReusedTaskApiProfile)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
@@ -233,23 +238,28 @@ export default function SettingsModal() {
   const unorderedProviderOptions = [
     { label: 'OpenAI 兼容接口', value: 'openai', draggable: true },
     { label: 'fal.ai', value: 'fal', draggable: true },
-    ...draft.customProviders.map((provider) => ({
-      label: provider.name,
-      value: provider.id,
-      draggable: true,
-      actions: isPresetProviderLocked(provider.id) ? undefined : [
-        { label: '编辑', onClick: () => openEditCustomProvider(provider) },
-        {
+    ...draft.customProviders.map((provider) => {
+      const actions = [
+        ...(!presetConfigOnly && !isPresetProviderLocked(provider.id) ? [{ label: '编辑', onClick: () => openEditCustomProvider(provider) }] : []),
+        ...(!presetConfigOnly && !isPresetProviderDeletionPrevented(provider.id, draft.profiles) ? [{
           label: '删除',
           variant: 'danger' as const,
           onClick: () => confirmDeleteCustomProvider(provider),
-        },
-      ],
-    })),
+        }] : []),
+      ]
+      return {
+        label: provider.name,
+        value: provider.id,
+        draggable: true,
+        actions: actions.length ? actions : undefined,
+      }
+    }),
   ]
 
   const providerOptions = [
-    { label: '创建自定义服务商', value: ADD_CUSTOM_PROVIDER_VALUE, variant: 'action' as const },
+    ...(!presetConfigOnly && !activeProfileLocked
+      ? [{ label: '创建自定义服务商', value: ADD_CUSTOM_PROVIDER_VALUE, variant: 'action' as const }]
+      : []),
     ...unorderedProviderOptions.sort((a, b) => {
       const aIndex = providerOrder.indexOf(String(a.value))
       const bIndex = providerOrder.indexOf(String(b.value))
@@ -468,29 +478,12 @@ export default function SettingsModal() {
       return result
     }
 
-    const provider = draft.customProviders.find((item) => item.id === profile.provider)
-    const importProfile: ApiProfile = {
-      ...profile,
-      isDefault: undefined,
-      apiKey: options.includeApiKey ? profile.apiKey : '',
-    }
-    if (!options.includeApiKey) {
-      if (options.useNewApiAddress) importProfile.baseUrl = '{address}'
-      if (options.useNewApiKey) importProfile.apiKey = '{key}'
-      if (options.useNewApiModel) importProfile.model = '{model}'
-    }
-    url.searchParams.set('settings', JSON.stringify({
-      customProviders: provider ? [provider] : [],
-      profiles: [importProfile],
-    }))
-
-    let result = url.toString()
-    if (!options.includeApiKey) {
-      if (options.useNewApiAddress) result = result.replace(/%7Baddress%7D/g, '{address}')
-      if (options.useNewApiKey) result = result.replace(/%7Bkey%7D/g, '{key}')
-      if (options.useNewApiModel) result = result.replace(/%7Bmodel%7D/g, '{model}')
-    }
-    return result
+    return createCustomProfileImportUrl(
+      window.location.href,
+      profile,
+      draft.customProviders.find((item) => item.id === profile.provider),
+      options,
+    )
   }
 
   const copyProfileImportUrl = async (profile: ApiProfile, options: ProfileImportUrlOptions) => {
@@ -516,14 +509,14 @@ export default function SettingsModal() {
     })
 
   const updateActiveProfile = (patch: Partial<ApiProfile>, commit = false) => {
-    if (activeProfileLocked) return
+    if (activeProfileLocked && (Object.keys(patch).length !== 1 || patch.apiKey === undefined)) return
     const nextDraft = getDraftWithActiveProfilePatch(patch)
     setDraft(nextDraft)
     if (commit) commitSettings(nextDraft)
   }
 
   const commitActiveProfilePatch = (patch: Partial<ApiProfile>) => {
-    if (activeProfileLocked) return
+    if (activeProfileLocked && (Object.keys(patch).length !== 1 || patch.apiKey === undefined)) return
     const nextDraft = getDraftWithActiveProfilePatch(patch)
     commitSettings(nextDraft)
   }
@@ -665,7 +658,7 @@ export default function SettingsModal() {
       }
       setIsImportingData(true)
       try {
-        const imported = await importData(files, { importConfig, importTasks })
+        const imported = await importData(files, { importConfig: presetConfigOnly ? false : importConfig, importTasks })
         if (imported) {
           const nextDraft = normalizeSettings(useStore.getState().settings)
           setDraft(nextDraft)
@@ -790,7 +783,7 @@ export default function SettingsModal() {
     let newTargetIndex = targetIndex
     if (position === 'after') newTargetIndex++
     if (sourceIndex < targetIndex) newTargetIndex--
-    if (defaultProfileId) newTargetIndex = Math.max(1, newTargetIndex)
+    if (draft.profiles.some((profile) => profile.id === defaultProfileId)) newTargetIndex = Math.max(1, newTargetIndex)
 
     newProfiles.splice(newTargetIndex, 0, removed)
 
@@ -950,7 +943,7 @@ export default function SettingsModal() {
   }
 
   function openEditCustomProvider(provider: CustomProviderDefinition) {
-    if (isPresetProviderLocked(provider.id)) return
+    if (presetConfigOnly || isPresetProviderLocked(provider.id)) return
     setEditingCustomProviderId(provider.id)
     setCustomProviderJson(JSON.stringify({
       name: provider.name,
@@ -963,7 +956,7 @@ export default function SettingsModal() {
   }
 
   const saveCustomProvider = () => {
-    if (editingCustomProviderId && isPresetProviderLocked(editingCustomProviderId)) return
+    if (presetConfigOnly || (editingCustomProviderId && isPresetProviderLocked(editingCustomProviderId))) return
     try {
       const customProvider = buildCustomProviderFromJson()
       if (editingCustomProviderId) {
@@ -987,6 +980,7 @@ export default function SettingsModal() {
         customProviders: [...draft.customProviders, customProvider],
         profiles: draft.profiles.map((profile) => profile.id === activeProfile.id ? nextProfile : profile),
       })
+      restorePresetProvider(customProvider.id)
       commitSettings(nextDraft)
       setShowCustomProviderImport(false)
       setEditingCustomProviderId(null)
@@ -997,7 +991,7 @@ export default function SettingsModal() {
   }
 
   function confirmDeleteCustomProvider(provider: CustomProviderDefinition) {
-    if (isPresetProviderLocked(provider.id)) return
+    if (presetConfigOnly || isPresetProviderDeletionPrevented(provider.id, draft.profiles)) return
     setConfirmDialog({
       title: '删除服务商',
       message: `确定要删除自定义服务商「${provider.name}」吗？正在使用它的配置会切回 OpenAI 兼容接口。`,
@@ -1006,8 +1000,9 @@ export default function SettingsModal() {
   }
 
   function deleteCustomProvider(provider: CustomProviderDefinition) {
-    if (isPresetProviderLocked(provider.id)) return
+    if (presetConfigOnly || isPresetProviderDeletionPrevented(provider.id, draft.profiles)) return
     const providerId = provider.id
+    if (isPresetProvider(providerId)) dismissPresetProvider(providerId)
     const nextDraft = normalizeSettings({
       ...draft,
       customProviders: draft.customProviders.filter((provider) => provider.id !== providerId),
@@ -1053,6 +1048,7 @@ export default function SettingsModal() {
               ...mergedDraft,
               activeProfileId: importedProfile.id,
             })
+        for (const provider of imported.customProviders) restorePresetProvider(provider.id)
         setDraft(nextDraft)
         setSettings(nextDraft)
         setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
@@ -1494,7 +1490,6 @@ export default function SettingsModal() {
                     onChange={(e) => updateActiveProfile({ apiKey: e.target.value })}
                     onBlur={(e) => commitActiveProfilePatch({ apiKey: e.target.value })}
                     type={showApiKey ? 'text' : 'password'}
-                    disabled={activeProfileLocked}
                     placeholder={activeProfile.provider === 'fal' ? 'FAL_KEY' : 'sk-...'}
                     className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 pr-10 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                   />
@@ -1771,11 +1766,11 @@ export default function SettingsModal() {
                   </div>
                   <p className="text-xs text-gray-500 dark:text-gray-400">支持一次导入多个普通备份；分片备份请一次性选中同一批次的全部分片</p>
                   <div className="flex flex-wrap gap-x-6 gap-y-3">
-                    <Checkbox
+                    {!presetConfigOnly && <Checkbox
                       checked={importConfig}
                       onChange={setImportConfig}
                       label="包含配置"
-                    />
+                    />}
                     <Checkbox
                       checked={importTasks}
                       onChange={setImportTasks}
@@ -1784,7 +1779,7 @@ export default function SettingsModal() {
                   </div>
                   <button
                     onClick={() => importInputRef.current?.click()}
-                    disabled={(!importConfig && !importTasks) || isImportingData}
+                    disabled={(!(presetConfigOnly ? false : importConfig) && !importTasks) || isImportingData}
                     className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
                   >
                     {isImportingData ? (

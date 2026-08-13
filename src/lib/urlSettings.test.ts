@@ -6,24 +6,45 @@ import {
   DEFAULT_SETTINGS,
   normalizeSettings,
 } from './apiProfiles'
-import { buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams } from './urlSettings'
+import { buildSettingsFromUrlParams, clearUrlSettingParams, getExplicitUrlSettingsIds, hasUrlSettingParams } from './urlSettings'
 
 afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-async function importPresetConfigOnlyUrlSettings(options: { locked?: boolean } = {}) {
+async function importPresetConfigOnlyUrlSettings(options: { locked?: boolean, multiple?: boolean } = {}) {
   vi.resetModules()
   vi.stubEnv('VITE_SHOW_PRESET_CONFIG_ONLY', 'true')
   if (options.locked) vi.stubEnv('VITE_LOCK_PRESET_CONFIG_PARAMS', 'true')
   vi.stubEnv('VITE_DEFAULT_API_URL', 'https://default.example.com/v1')
   const apiProfiles = await import('./apiProfiles')
   const presetConfig = await import('./presetConfig')
-  presetConfig.setPresetConfig({ customProviders: [], profiles: [apiProfiles.createDefaultOpenAIProfile()] })
+  presetConfig.setPresetConfig({
+    customProviders: [],
+    profiles: options.multiple
+      ? [
+          apiProfiles.createDefaultOpenAIProfile({ id: 'preset-a', name: 'Preset A', isDefault: true }),
+          apiProfiles.createDefaultOpenAIProfile({ id: 'preset-b', name: 'Preset B' }),
+        ]
+      : [apiProfiles.createDefaultOpenAIProfile()],
+  })
   return import('./urlSettings')
 }
 
 describe('URL settings params', () => {
+  it('reports only IDs explicitly included in URL settings and profileId', () => {
+    const params = new URLSearchParams('profileId=preset-query-profile')
+    params.set('settings', JSON.stringify({
+      customProviders: [{ id: 'preset-provider' }, { name: 'No ID' }],
+      profiles: [{ id: 'preset-json-profile' }, { provider: 'openai' }],
+    }))
+
+    expect(getExplicitUrlSettingsIds(params)).toEqual({
+      providerIds: ['preset-provider'],
+      profileIds: ['preset-json-profile', 'preset-query-profile'],
+    })
+  })
+
   it('creates and activates a new OpenAI profile for legacy URL params', () => {
     const current = normalizeSettings(DEFAULT_SETTINGS)
     const next = normalizeSettings({
@@ -57,6 +78,41 @@ describe('URL settings params', () => {
     expect(second.profiles.find((profile) => profile.id === 'shared-openai')).toMatchObject({
       baseUrl: 'https://api.example.com/v2/v1',
       model: 'model-v2',
+    })
+  })
+
+  it('preserves fields omitted from a same-ID OpenAI share URL', () => {
+    const existingProfile = createDefaultOpenAIProfile({
+      id: 'shared-openai',
+      name: 'Existing OpenAI',
+      baseUrl: 'https://old.example.com/v1',
+      apiKey: 'existing-key',
+      model: 'existing-responses-model',
+      timeout: 900,
+      apiMode: 'responses',
+      apiProxy: true,
+      responseFormatB64Json: true,
+    })
+    const current = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      profiles: [createDefaultOpenAIProfile(), existingProfile],
+      activeProfileId: DEFAULT_SETTINGS.activeProfileId,
+    })
+    const next = normalizeSettings({
+      ...current,
+      ...buildSettingsFromUrlParams(current, new URLSearchParams('profileId=shared-openai&apiUrl=https://new.example.com/v1&profileName=Shared')),
+    })
+
+    expect(next.activeProfileId).toBe(existingProfile.id)
+    expect(next.profiles.find((profile) => profile.id === existingProfile.id)).toMatchObject({
+      name: 'Shared',
+      baseUrl: 'https://new.example.com/v1',
+      apiKey: 'existing-key',
+      model: 'existing-responses-model',
+      timeout: 900,
+      apiMode: 'responses',
+      apiProxy: true,
+      responseFormatB64Json: true,
     })
   })
 
@@ -622,12 +678,151 @@ describe('URL settings params', () => {
     })
   })
 
-  it('ignores URL parameter changes when preset parameters are locked', async () => {
+  it('patches and activates the preset profile selected by profileId', async () => {
+    const { buildSettingsFromUrlParams } = await importPresetConfigOnlyUrlSettings({ multiple: true })
+    const profileA = createDefaultOpenAIProfile({
+      id: 'preset-a',
+      name: 'Preset A',
+      apiKey: 'key-a',
+      model: 'model-a',
+      isDefault: true,
+    })
+    const profileB = createDefaultOpenAIProfile({
+      id: 'preset-b',
+      name: 'Preset B',
+      apiKey: 'key-b',
+      model: 'model-b',
+    })
+    const current = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      profiles: [profileA, profileB],
+      activeProfileId: profileA.id,
+    })
+    const params = new URLSearchParams('profileId=preset-b&apiUrl=https://preset-b.example.com/v1')
+    params.set('settings', JSON.stringify({
+      profiles: [{
+        id: 'preset-b',
+        provider: 'openai',
+        model: 'patched-model-b',
+        timeout: 240,
+      }],
+    }))
+
+    const next = normalizeSettings({
+      ...current,
+      ...buildSettingsFromUrlParams(current, params),
+    })
+
+    expect(next.activeProfileId).toBe(profileB.id)
+    expect(next.profiles.find((profile) => profile.id === profileA.id)).toMatchObject({
+      name: 'Preset A',
+      apiKey: 'key-a',
+      model: 'model-a',
+    })
+    expect(next.profiles.find((profile) => profile.id === profileB.id)).toMatchObject({
+      name: 'Preset B',
+      baseUrl: 'https://preset-b.example.com/v1',
+      apiKey: 'key-b',
+      model: 'patched-model-b',
+      timeout: 240,
+    })
+  })
+
+  it('ignores a same-ID settings profile with a conflicting provider in preset-only mode', async () => {
+    const { buildSettingsFromUrlParams } = await importPresetConfigOnlyUrlSettings({ multiple: true })
+    const current = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      profiles: [
+        createDefaultOpenAIProfile({ id: 'preset-a', isDefault: true }),
+        createDefaultOpenAIProfile({ id: 'preset-b', model: 'original-model' }),
+      ],
+      activeProfileId: 'preset-a',
+    })
+    const params = new URLSearchParams('profileId=preset-b&apiKey=query-key')
+    params.set('settings', JSON.stringify({
+      profiles: [{
+        id: 'preset-b',
+        provider: 'fal',
+        apiKey: 'json-key',
+        model: 'conflicting-model',
+      }],
+    }))
+
+    const next = normalizeSettings({
+      ...current,
+      ...buildSettingsFromUrlParams(current, params),
+    })
+
+    expect(next.activeProfileId).toBe('preset-b')
+    expect(next.profiles.find((profile) => profile.id === 'preset-b')).toMatchObject({
+      provider: 'openai',
+      apiKey: 'query-key',
+      model: 'original-model',
+    })
+  })
+
+  it('does not fall back to another settings profile when the requested preset ID is missing', async () => {
+    const { buildSettingsFromUrlParams } = await importPresetConfigOnlyUrlSettings({ multiple: true })
+    const current = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      profiles: [
+        createDefaultOpenAIProfile({ id: 'preset-a', isDefault: true }),
+        createDefaultOpenAIProfile({ id: 'preset-b', model: 'original-model' }),
+      ],
+      activeProfileId: 'preset-a',
+    })
+    const params = new URLSearchParams('profileId=preset-b&apiKey=query-key')
+    params.set('settings', JSON.stringify({
+      profiles: [{
+        id: 'other-profile',
+        provider: 'openai',
+        apiKey: 'json-key',
+        model: 'fallback-model',
+      }],
+    }))
+
+    const next = normalizeSettings({
+      ...current,
+      ...buildSettingsFromUrlParams(current, params),
+    })
+
+    expect(next.activeProfileId).toBe('preset-b')
+    expect(next.profiles.find((profile) => profile.id === 'preset-b')).toMatchObject({
+      apiKey: 'query-key',
+      model: 'original-model',
+    })
+  })
+
+  it('only applies the API key from URL parameters when preset parameters are locked', async () => {
     const { buildSettingsFromUrlParams } = await importPresetConfigOnlyUrlSettings({ locked: true })
     const current = normalizeSettings(DEFAULT_SETTINGS)
+    const next = normalizeSettings({
+      ...current,
+      ...buildSettingsFromUrlParams(current, new URLSearchParams(
+        'apiUrl=https://changed.example.com/v1&apiKey=changed-key&model=changed-model',
+      )),
+    })
+
+    expect(next.profiles[0]).toMatchObject({
+      baseUrl: current.profiles[0].baseUrl,
+      apiKey: 'changed-key',
+      model: current.profiles[0].model,
+    })
+  })
+
+  it('ignores an invalid explicit profileId in preset-only mode', async () => {
+    const { buildSettingsFromUrlParams } = await importPresetConfigOnlyUrlSettings({ multiple: true })
+    const current = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      profiles: [
+        createDefaultOpenAIProfile({ id: 'preset-a', apiKey: 'key-a', isDefault: true }),
+        createDefaultOpenAIProfile({ id: 'preset-b', apiKey: 'key-b' }),
+      ],
+      activeProfileId: 'preset-a',
+    })
 
     expect(buildSettingsFromUrlParams(current, new URLSearchParams(
-      'apiUrl=https://changed.example.com/v1&apiKey=changed-key&model=changed-model',
+      'profileId=missing-preset&apiKey=changed-key',
     ))).toEqual({})
   })
 })

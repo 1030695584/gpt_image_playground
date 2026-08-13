@@ -10,7 +10,7 @@
 
 **基于 OpenAI gpt-image-2 API 的图片生成与编辑工具**
 
-提供简洁精美的 Web UI，支持 OpenAI / OpenAI 兼容接口、fal.ai 与可导入的自定义 HTTP 服务商。<br>
+提供简洁精美的 Web UI，支持 OpenAI / OpenAI 兼容接口、fal.ai 与可导入的自定义 HTTP 供应商。<br>
 支持文本生图、参考图与遮罩编辑，数据纯本地化存储，带来流畅的历史记录与参数管理体验。
 
 <br>
@@ -166,10 +166,10 @@
 - **优化的图片查看与下载**：大图预览支持左右滑动切换、移动端长按弹出操作菜单，支持快捷下载与批量下载。
 - **极致性能与隐私**：所有记录与图片均存放在浏览器 IndexedDB 中（采用 SHA-256 去重压缩），不经过任何第三方服务器。支持一键打包导出 ZIP 备份。
 
-### 🔌 多配置与服务商增强
-- **多配置管理**：支持创建并保存多个 API 配置（包含服务商、API Key、模型等），按需快速切换；支持一键复制当前配置到列表底部，并通过拖拽对配置列表与服务商列表进行自定义排序。
-- **多服务商接入**：内置 OpenAI 兼容接口（含 `Images API` 和 `Responses API`）、fal.ai（支持队列），并支持通过 JSON 导入自定义 HTTP 服务商配置（兼容同步/异步任务）。
-- **Agent 模式独立 API 配置**：支持为 Agent 模式使用原生（Response API）或混合（Response API + Image API）的独立 API 配置，解决部分服务商/模型不支持 `image_generation` 工具的问题。
+### 🔌 多配置与供应商增强
+- **多配置管理**：支持创建并保存多个 API 配置（包含供应商、API Key、模型等），按需快速切换；支持一键复制当前配置到列表底部，并通过拖拽对配置列表与供应商列表进行自定义排序。
+- **多供应商接入**：内置 OpenAI 兼容接口（含 `Images API` 和 `Responses API`）、fal.ai（支持队列），并支持通过 JSON 导入自定义 HTTP 供应商配置（兼容同步/异步任务）。
+- **Agent 模式独立 API 配置**：支持为 Agent 模式使用原生（Response API）或混合（Response API + Image API）的独立 API 配置，解决部分供应商/模型不支持 `image_generation` 工具的问题。
 - **API 代理**：OpenAI 兼容接口与 fal.ai 均可配置自定义代理。其中 OpenAI 兼容接口可开启同源 `/api-proxy/` 代理，交由 Docker 或本地开发环境转发至真实 API，绕开浏览器 CORS 限制。
 - **Codex CLI 兼容模式**：对上游为 Codex CLI 的 API，开启后应用 Codex CLI 实际支持的参数，并将多图生成拆分为并发单图。
 - **提示词防改写**：Responses API 会始终在请求文本前加入强制指令防止提示词被改写；开启 Codex CLI 模式后，Images API 也会获得同等保护。
@@ -190,34 +190,26 @@
 |------|------|------|
 | **直接填写 API 地址** | 自动创建一个 OpenAI 兼容的默认预置配置，填好 API URL、默认模型等基础参数，用户只需补充 API Key。适合只提供一个配置的部署。 | `https://api.openai.com/v1` |
 | **API 地址 + 查询参数** | 在地址后追加参数，可同时预填 Key、模型等字段。 | `https://api.openai.com/v1?model=gpt-image-2&apiMode=responses` |
-| **JSON 配置文件 / 分享链接** | 通过 JSON 文件（远程 URL / 本地路径）或含 `?settings=` 参数的分享链接提供完整预置配置，支持预置多个配置（OpenAI 兼容、fal.ai 或自定义服务商）。 | 详见 [预置配置 JSON 格式](#preset-config-json) |
+| **JSON 配置文件 / 分享链接** | 通过 JSON 文件（远程 URL / 本地路径）或含 `?settings=` 参数的分享链接提供完整预置配置，支持预置多个配置（OpenAI 兼容、fal.ai 或自定义供应商）。 | 详见 [预置配置 JSON 格式](#preset-config-json) |
 
-**预置配置行为**
+**环境变量一览**
 
-| 项目 | 默认行为 | 开启"锁定参数"后 |
+部署时可以通过设置环境变量来控制预置配置和客户端行为。有关 Docker 专属的网络与代理配置（如 `ENABLE_API_PROXY` 等），请参考下方的 [Docker 部署](#docker-deployment) 章节。
+
+| 构建时变量 (Vercel/CF/本地) | Docker 运行变量 | 功能说明 |
 |------|------|------|
-| API URL（`baseUrl`） | 重新部署后自动更新到已有用户 | 同左 |
-| 模型、API Key、超时等参数 | 用户可修改，保留本地值，重新部署不覆盖 | 用户无法修改，强制跟随部署端 |
-| 排序 | 普通预置可拖动，排序保存在浏览器，重新部署不覆盖 | 同左 |
-| 删除 | 允许删除（至少保留一项），删除保存在浏览器，重新部署不恢复。可通过环境变量禁止。 | 同左 |
-| 默认项 | 单个自动成为默认；多个时必须有一项 `isDefault: true`。固定置顶不可拖动，新浏览器首次选中。 | 同左 |
-| 部署端移除的旧预置 | 恢复为可编辑、可删除的普通配置 | 同左 |
+| `VITE_DEFAULT_API_URL` | `DEFAULT_API_URL` | 设定预置配置值（支持 URL 形式或 JSON 格式，详见后文） |
+| `VITE_LOCK_PRESET_CONFIG_PARAMS=true` | `LOCK_PRESET_CONFIG_PARAMS=true` | 锁定预置配置中除 API Key 外的参数，并禁止编辑预置供应商定义；当前锁定配置引用的供应商不可删除，解除引用后可删除 |
+| `VITE_PREVENT_PRESET_CONFIG_DELETION=true` | `PREVENT_PRESET_CONFIG_DELETION=true` | 禁止删除预置配置和预置供应商，不锁定参数；普通项不受影响 |
+| `VITE_SHOW_PRESET_CONFIG_ONLY=true` | `SHOW_PRESET_CONFIG_ONLY=true` | 只允许使用当前预置配置，禁止创建、复制、删除、拖动、切换供应商和管理自定义供应商；未同时开启锁定时参数仍可编辑，API Key 始终可编辑 |
 
-**部署环境变量一览**
+> **未开启上述限制时的默认行为**：
+> - **参数更新**：API 地址重新部署后自动更新到已有用户；模型、超时等参数保留用户本地修改的值，重新部署不覆盖。
+> - **API Key**：始终由用户在本地管理，重新部署不覆盖。
+> - **排序与删除**：普通预置配置可拖动；预置配置和预置供应商均允许删除，删除状态保存在浏览器中，重新部署不会恢复。
+> - **失效预置**：部署端移除的旧预置会恢复为可编辑、可删除的普通配置。
 
-| 构建时（Vercel / Cloudflare / 本地） | Docker 运行时 | 说明 |
-|------|------|------|
-| `VITE_DEFAULT_API_URL` | `DEFAULT_API_URL` | 预置配置值（详见 [预置配置 JSON 格式](#preset-config-json)） |
-| `VITE_LOCK_PRESET_CONFIG_PARAMS=true` | `LOCK_PRESET_CONFIG_PARAMS=true` | 锁定预置配置中除 API URL 外的参数，使其持续跟随部署端更新；API URL 无需开启此项也会更新，用户排序不受影响 |
-| `VITE_PREVENT_PRESET_CONFIG_DELETION=true` | `PREVENT_PRESET_CONFIG_DELETION=true` | 不允许删除当前部署的预置配置；默认允许删除 |
-| `VITE_SHOW_PRESET_CONFIG_ONLY=true` | `SHOW_PRESET_CONFIG_ONLY=true` | 只展示预置配置，不能新建、复制、删除、拖动或切换服务商类型 |
-| — | `ENABLE_API_PROXY=true` | 开启 Nginx 同源 API 代理 |
-| — | `API_PROXY_URL` | 代理转发的完整 API 基础地址 |
-| — | `LOCK_API_PROXY=true` | 强制锁定代理为开启 |
-| — | `HOST` / `PORT` | Nginx 监听地址和端口（默认 `0.0.0.0:80`） |
-
-> 旧变量 `VITE_SHOW_DEFAULT_CONFIG_ONLY`／`SHOW_DEFAULT_CONFIG_ONLY` 仍可使用，等同于对应的新变量。
-
+> 兼容提示：旧变量 `VITE_SHOW_DEFAULT_CONFIG_ONLY`／`SHOW_DEFAULT_CONFIG_ONLY` 仍可使用，等同于对应的 `SHOW_PRESET_CONFIG_ONLY`。
 
 <details>
 <summary><strong>▲ 方式一：Vercel 一键部署 (推荐)</strong></summary>
@@ -284,6 +276,7 @@ npm run deploy:cf
 
 </details>
 
+<a id="docker-deployment"></a>
 <details>
 <summary><strong>🐳 方式三：Docker 部署</strong></summary>
 
@@ -308,7 +301,7 @@ npm run deploy:cf
 配合 `ENABLE_API_PROXY=true` + `LOCK_API_PROXY=true` 可隐藏上游地址：
 
 - OpenAI 兼容接口：`DEFAULT_API_URL` 留空或填占位地址（如 `https://proxy`）。
-- 自定义服务商：JSON 中 profile 的 `baseUrl` 留空并设置 `apiProxy: true`（仅支持同步配置）。
+- 自定义供应商：JSON 中配置的 `baseUrl` 留空并设置 `apiProxy: true`（仅支持同步配置）。
 
 用户只能看到空值或占位地址，真实地址仅存在于 `API_PROXY_URL`。
 
@@ -444,22 +437,22 @@ https://cooksleep.github.io/gpt_image_playground?apiUrl={address}&apiKey={key}&m
 
 使用 JSON 文件或分享链接提供预置配置时，JSON 对象包含两个顶层字段：
 
-- **`customProviders`**（数组）：自定义服务商 Manifest。如果只用 OpenAI 兼容或 fal.ai，此数组留空 `[]` 即可。
+- **`customProviders`**（数组）：自定义供应商定义。如果只用 OpenAI 兼容或 fal.ai，此数组留空 `[]` 即可。
 - **`profiles`**（数组）：预置的 API 配置列表。每项对应用户配置页中的一个配置条目。
 
-### profiles 字段说明
+### 配置列表字段说明（`profiles`）
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `id` | 建议填写 | 配置的唯一标识，用于跨部署追踪同一项。未填写时按内容自动生成。 |
+| `id` | 跨部署更新时填写 | JSON／分享配置若需跨部署更新同一项，应提供稳定且具体的 ID；内置 `default-openai` 仅用于直接 API URL／查询参数方式。 |
 | `name` | 是 | 配置名称，方便用户识别。 |
-| `provider` | 是 | 服务商类型。`"openai"` 为 OpenAI 兼容接口，`"fal"` 为 fal.ai，其他值引用 `customProviders` 中同 ID 的 Manifest。 |
+| `provider` | 是 | 供应商类型。`"openai"` 为 OpenAI 兼容接口，`"fal"` 为 fal.ai，其他值引用 `customProviders` 中具有相同 ID 的供应商定义。 |
 | `baseUrl` | 是 | API Base URL。OpenAI 兼容接口填入完整地址（如 `https://api.openai.com/v1`）；fal.ai 可留空。 |
 | `apiKey` | 否 | API Key。建议省略，让用户导入后自行填写。 |
 | `model` | 是 | 默认模型 ID。 |
 | `apiMode` | 否 | `"images"` 或 `"responses"`，默认 `"images"`。 |
-| `isDefault` | 否 | 多个 profile 时，为默认项设置 `true`（只能有一个）。单 profile 时不填。 |
-| `timeout` | 否 | 请求超时秒数，默认 300。 |
+| `isDefault` | 否 | 有多个配置时，为默认项设置 `true`（只能有一个）；只有一个配置时不填。 |
+| `timeout` | 否 | 请求超时秒数，默认 600。 |
 | `apiProxy` | 否 | 是否走部署端 API 代理，默认 `false`。 |
 
 ### 示例：仅 OpenAI 兼容
@@ -544,25 +537,25 @@ docker run -d -p 8080:80 \
 ---
 
 <a id="custom-provider-config"></a>
-## 🔌 自定义服务商
+## 🔌 自定义供应商
 
-当 API 不是标准 OpenAI 格式时，需要在 `customProviders` 中编写 Manifest 来描述请求和响应结构。每个 Manifest 必须有唯一的 `id`，然后在 `profiles` 中通过 `provider` 引用它。
+当 API 不是标准 OpenAI 格式时，需要在 `customProviders` 中定义请求和响应结构。每个供应商定义必须有唯一的 `id`，然后由 `profiles` 中配置的 `provider` 字段引用。
 
 **创建方式：**
 
-1. **在线体验中生成**：打开 [Vercel 在线体验](https://gpt-image-playground.cooksleep.dev) 或 [GitHub Pages 在线体验](https://cooksleep.github.io/gpt_image_playground)，进入 **设置 → API 配置 → 服务商类型 → 创建自定义服务商 → AI 一键生成与导入**，粘贴第三方 API 文档让 AI 生成配置。
+1. **在线体验中生成**：打开 [Vercel 在线体验](https://gpt-image-playground.cooksleep.dev) 或 [GitHub Pages 在线体验](https://cooksleep.github.io/gpt_image_playground)，进入 **设置 → API 配置 → 供应商类型 → 创建自定义供应商 → AI 一键生成与导入**，粘贴第三方 API 文档让 AI 生成配置。
 2. **应用内导出**：生成完成后，在 **API 配置 → 当前配置** 右侧点击"链接按钮"复制含 `?settings=` 参数的分享 URL，可直接用作环境变量值。
 
-也可以参考 [自定义服务商 LLM 提示词](docs/custom-provider-llm-prompt.md)，将提示词和第三方 API 文档直接发给任意 LLM，手动获取完整 JSON。
+也可以参考 [自定义供应商 LLM 提示词](docs/custom-provider-llm-prompt.md)，将提示词和第三方 API 文档直接发给任意 LLM，手动获取完整 JSON。
 
-**完整 JSON 示例（含异步任务 Manifest）：**
+**完整 JSON 示例（含异步任务供应商定义）：**
 
 ```json
 {
   "customProviders": [
     {
       "id": "custom-example-task",
-      "name": "示例异步任务服务商",
+      "name": "示例异步任务供应商",
       "submit": {
         "path": "images/generations",
         "method": "POST",
@@ -597,7 +590,7 @@ docker run -d -p 8080:80 \
   "profiles": [
     {
       "id": "example-profile",
-      "name": "示例异步任务服务商",
+      "name": "示例异步任务供应商",
       "provider": "custom-example-task",
       "baseUrl": "https://api.example.com/v1",
       "model": "gpt-image-2",
@@ -607,7 +600,7 @@ docker run -d -p 8080:80 \
 }
 ```
 
-示例中的 `example-profile` 是唯一 profile，因此自动成为默认预置配置。若添加更多 profile，需要为其中一项设置 `isDefault: true`。
+示例中的 `example-profile` 是唯一配置，因此自动成为默认预置配置。若添加更多配置，需要为其中一项设置 `isDefault: true`。
 
 ---
 

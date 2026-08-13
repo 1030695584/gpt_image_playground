@@ -8,6 +8,7 @@ import { getPersistableAgentConversations, stripPersistedAgentConversations } fr
 export interface PersistedAppState {
   settings: AppSettings
   dismissedPresetProfileIds?: string[]
+  dismissedPresetProviderIds?: string[]
   params: TaskParams
   prompt?: string
   inputImages?: InputImage[]
@@ -37,13 +38,14 @@ type PersistedStateSource = Omit<PersistedAppState, 'prompt' | 'inputImages' | '
 
 type PersistedStateFallback = Pick<
   PersistedAppState,
-  'settings' | 'params' | 'dismissedPresetProfileIds' | 'dismissedCodexCliPrompts' | 'favoriteCollections' | 'defaultFavoriteCollectionId'
+  'settings' | 'params' | 'dismissedPresetProfileIds' | 'dismissedPresetProviderIds' | 'dismissedCodexCliPrompts' | 'favoriteCollections' | 'defaultFavoriteCollectionId'
 > & {
   agentConversations: AgentConversation[]
 }
 
 export type NormalizedPersistedAppState = PersistedAppState & {
   dismissedPresetProfileIds: string[]
+  dismissedPresetProviderIds: string[]
   prompt: string
   inputImages: InputImage[]
   maskDraft: MaskDraft | null
@@ -89,6 +91,7 @@ export function createPersistedState(state: PersistedStateSource, includeLegacyA
   return {
     settings,
     dismissedPresetProfileIds: state.dismissedPresetProfileIds ?? [],
+    dismissedPresetProviderIds: state.dismissedPresetProviderIds ?? [],
     params: state.params,
     ...(settings.persistInputOnRestart && (state.appMode === 'gallery' || galleryInputDraft)
       ? {
@@ -182,6 +185,7 @@ export function normalizePersistedState(
     state: {
       settings,
       dismissedPresetProfileIds: normalizeStringArray(persistedState.dismissedPresetProfileIds, fallback.dismissedPresetProfileIds ?? []),
+      dismissedPresetProviderIds: normalizeStringArray(persistedState.dismissedPresetProviderIds, fallback.dismissedPresetProviderIds ?? []),
       params: normalizeParams(persistedState.params, fallback.params),
       dismissedCodexCliPrompts: normalizeStringArray(persistedState.dismissedCodexCliPrompts, fallback.dismissedCodexCliPrompts),
       appMode,

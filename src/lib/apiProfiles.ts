@@ -898,12 +898,10 @@ export function mergeImportedSettings(
   const imported = normalizeSettings({
     ...normalizedImported,
     customProviders: normalizedImported.customProviders,
-    profiles: options.preserveInternalIds
-      ? normalizedImported.profiles
-      : normalizedImported.profiles.map((profile) => ({
-          ...profile,
-          isDefault: undefined,
-        })),
+    profiles: normalizedImported.profiles.map((profile) => ({
+      ...profile,
+      isDefault: undefined,
+    })),
   })
 
   if (options.preserveInternalIds) {
@@ -957,7 +955,7 @@ export function mergeImportedSettings(
 export function mergePresetImportedSettings(
   currentSettings: Partial<AppSettings> | unknown,
   importedSettings: Partial<AppSettings> | unknown,
-  options: { lockPresetParams?: boolean; dismissedPresetProfileIds?: string[] } = {},
+  options: { lockPresetParams?: boolean; dismissedPresetProfileIds?: string[]; dismissedPresetProviderIds?: string[] } = {},
 ): { settings: AppSettings } {
   const importedRecord = isRecord(importedSettings) ? importedSettings : {}
   validateDeploymentProviderIds(importedRecord.customProviders)
@@ -969,6 +967,7 @@ export function mergePresetImportedSettings(
     isDefault: entry.source.isDefault === true,
   }))
   const dismissedIds = new Set(options.dismissedPresetProfileIds ?? [])
+  const dismissedProviderIds = new Set(options.dismissedPresetProviderIds ?? [])
   const sourceProfileEntries = allSourceProfileEntries.filter((entry) => !dismissedIds.has(entry.profile.id))
   const sourceProfiles = sourceProfileEntries.map((entry) => entry.profile)
   const sourceDefaultProfileId = allSourceProfileEntries.length === 1
@@ -976,11 +975,11 @@ export function mergePresetImportedSettings(
     : allSourceProfileEntries.find((entry) => entry.isDefault)?.profile.id ?? null
   const replacingPristineDefault = sourceProfiles.length > 0 && hasOnlyDefaultProfiles(current)
   const currentProvidersById = new Map(current.customProviders.map((provider) => [provider.id, provider]))
-  const nextProviders = normalizedImported.customProviders.map((provider) => {
+  const nextProviders = normalizedImported.customProviders.filter((provider) => !dismissedProviderIds.has(provider.id)).map((provider) => {
     const matched = currentProvidersById.get(provider.id)
     return matched && !options.lockPresetParams ? matched : provider
   })
-  const sourceProviderIds = new Set(nextProviders.map((provider) => provider.id))
+  const sourceProviderIds = new Set(normalizedImported.customProviders.map((provider) => provider.id))
   const retainedProviders = current.customProviders
     .filter((provider) => !sourceProviderIds.has(provider.id))
 
@@ -991,7 +990,8 @@ export function mergePresetImportedSettings(
       ...entry.profile,
       isDefault: entry.profile.id === sourceDefaultProfileId ? true : undefined,
     }
-    if (!matched || options.lockPresetParams) return importedProfile
+    if (!matched) return importedProfile
+    if (options.lockPresetParams) return { ...importedProfile, apiKey: matched.apiKey }
     return { ...matched, baseUrl: importedProfile.baseUrl, isDefault: importedProfile.isDefault }
   })
   const nextProfilesById = new Map(nextProfiles.map((profile) => [profile.id, profile]))

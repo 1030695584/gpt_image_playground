@@ -20,7 +20,7 @@ import type {
 } from './types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
 import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, mergeImportedSettings, mergePresetImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
-import { enforcePresetConfigPolicy, getPresetProfileIds, isPresetConfigDeletionPrevented, isPresetConfigOnlyEnabled, isPresetConfigParamsLocked, isPresetProfile } from './lib/presetConfig'
+import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPresetProviderIds, isPresetConfigDeletionPrevented, isPresetConfigOnlyEnabled, isPresetConfigParamsLocked, isPresetProfile, isPresetProviderDeletionPrevented } from './lib/presetConfig'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
@@ -282,6 +282,10 @@ interface AppState {
   ) => Promise<void>
   dismissedPresetProfileIds: string[]
   dismissPresetProfile: (id: string) => void
+  restorePresetProfile: (id: string) => void
+  dismissedPresetProviderIds: string[]
+  dismissPresetProvider: (id: string) => void
+  restorePresetProvider: (id: string) => void
   dismissedCodexCliPrompts: string[]
   dismissCodexCliPrompt: (key: string) => void
 
@@ -570,6 +574,18 @@ export const useStore = create<AppState>()(
           ? state.dismissedPresetProfileIds
           : [...state.dismissedPresetProfileIds, id],
       })),
+      restorePresetProfile: (id) => set((state) => ({
+        dismissedPresetProfileIds: state.dismissedPresetProfileIds.filter((item) => item !== id),
+      })),
+      dismissedPresetProviderIds: [],
+      dismissPresetProvider: (id) => set((state) => ({
+        dismissedPresetProviderIds: state.dismissedPresetProviderIds.includes(id)
+          ? state.dismissedPresetProviderIds
+          : [...state.dismissedPresetProviderIds, id],
+      })),
+      restorePresetProvider: (id) => set((state) => ({
+        dismissedPresetProviderIds: state.dismissedPresetProviderIds.filter((item) => item !== id),
+      })),
       setSettings: (s) => set((st) => {
         const previous = normalizeSettings(st.settings)
         const incoming = s as Partial<AppSettings>
@@ -602,7 +618,12 @@ export const useStore = create<AppState>()(
               : profile,
           )
         }
-        const settings = normalizeSettings(enforcePresetConfigPolicy(merged))
+        const effectiveDismissedPresetProviderIds = st.dismissedPresetProviderIds.filter((id) =>
+          !isPresetProviderDeletionPrevented(id, previous.profiles),
+        )
+        const settings = normalizeSettings(enforcePresetConfigPolicy(merged, {
+          dismissedPresetProviderIds: effectiveDismissedPresetProviderIds,
+        }))
         const shouldClearReusedProfile = st.reusedTaskApiProfileId && settings.activeProfileId === st.reusedTaskApiProfileId
         return {
           settings,
@@ -614,16 +635,29 @@ export const useStore = create<AppState>()(
       setPresetImportedSettings: async (importedSettings, transform) => {
         set((state) => {
           const presetIds = getPresetProfileIds()
+          const presetProviderIds = getPresetProviderIds()
           const dismissedPresetProfileIds = state.dismissedPresetProfileIds.filter((id) => presetIds.has(id))
+          const deletionPrevented = isPresetConfigDeletionPrevented()
+          const remainingPresetProfiles = (getPresetConfig()?.profiles ?? state.settings.profiles)
+            .filter((profile) => !dismissedPresetProfileIds.includes(profile.id))
+          const dismissedPresetProviderIds = state.dismissedPresetProviderIds
+            .filter((id) => presetProviderIds.has(id))
+          const effectiveDismissedPresetProviderIds = dismissedPresetProviderIds
+            .filter((id) => !isPresetProviderDeletionPrevented(id, remainingPresetProfiles))
           const merged = mergePresetImportedSettings(state.settings, importedSettings, {
             lockPresetParams: isPresetConfigParamsLocked(),
-            dismissedPresetProfileIds: isPresetConfigDeletionPrevented() ? [] : dismissedPresetProfileIds,
+            dismissedPresetProfileIds: deletionPrevented ? [] : dismissedPresetProfileIds,
+            dismissedPresetProviderIds: effectiveDismissedPresetProviderIds,
           })
-          const settings = normalizeSettings(enforcePresetConfigPolicy(normalizeSettings(transform?.(merged.settings) ?? merged.settings)))
+          const settings = normalizeSettings(enforcePresetConfigPolicy(
+            normalizeSettings(transform?.(merged.settings) ?? merged.settings),
+            { dismissedPresetProviderIds: effectiveDismissedPresetProviderIds },
+          ))
           const shouldClearReusedProfile = state.reusedTaskApiProfileId && settings.activeProfileId === state.reusedTaskApiProfileId
           return {
             settings,
             dismissedPresetProfileIds,
+            dismissedPresetProviderIds,
             reusedTaskApiProfileId: shouldClearReusedProfile ? null : state.reusedTaskApiProfileId,
             ...(shouldClearReusedProfile
               ? { reusedTaskApiProfileName: null, reusedTaskApiProfileMissing: false }
@@ -4169,8 +4203,19 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
   }
 
   if (options.clearConfig) {
-    useStore.setState({ dismissedCodexCliPrompts: [], supportPromptDismissed: false })
-    setSettings({ ...DEFAULT_SETTINGS })
+    const presetConfig = getPresetConfig()
+    useStore.setState({
+      dismissedPresetProfileIds: [],
+      dismissedPresetProviderIds: [],
+      dismissedCodexCliPrompts: [],
+      supportPromptDismissed: false,
+    })
+    if (presetConfig) {
+      useStore.setState({ settings: { ...DEFAULT_SETTINGS } })
+      await useStore.getState().setPresetImportedSettings(presetConfig)
+    } else {
+      setSettings({ ...DEFAULT_SETTINGS })
+    }
     setParams({ ...DEFAULT_PARAMS })
   }
 
@@ -4321,6 +4366,21 @@ export interface ImportOptions {
   importTasks?: boolean
 }
 
+export async function restoreExplicitPresetConfig(ids: { providerIds: string[], profileIds: string[] }) {
+  const presetProviderIds = getPresetProviderIds()
+  const presetProfileIds = getPresetProfileIds()
+  const providerIds = ids.providerIds.filter((id) => presetProviderIds.has(id))
+  const profileIds = ids.profileIds.filter((id) => presetProfileIds.has(id))
+  if (!providerIds.length && !profileIds.length) return false
+
+  const state = useStore.getState()
+  for (const id of providerIds) state.restorePresetProvider(id)
+  for (const id of profileIds) state.restorePresetProfile(id)
+  const presetConfig = getPresetConfig()
+  if (presetConfig) await useStore.getState().setPresetImportedSettings(presetConfig)
+  return true
+}
+
 /** 导入 ZIP 数据 */
 export async function importData(input: File | File[], options: ImportOptions = { importConfig: true, importTasks: true }): Promise<boolean> {
   try {
@@ -4438,11 +4498,26 @@ export async function importData(input: File | File[], options: ImportOptions = 
 
     if (options.importConfig && settingsManifests.length) {
       const state = useStore.getState()
+      const providerIds = new Set(settingsManifests.flatMap((part) =>
+        part.manifest.settings?.customProviders.map((provider) => provider.id) ?? [],
+      ))
+      const profileIds = new Set(settingsManifests.flatMap((part) =>
+        part.manifest.settings?.profiles.map((profile) => profile.id) ?? [],
+      ))
+      const presetProviderIds = getPresetProviderIds()
+      const presetProfileIds = getPresetProfileIds()
+      for (const id of providerIds) {
+        if (presetProviderIds.has(id)) state.restorePresetProvider(id)
+      }
+      for (const id of profileIds) {
+        if (presetProfileIds.has(id)) state.restorePresetProfile(id)
+      }
+      const current = useStore.getState()
       const settings = settingsManifests.reduce(
         (current, part) => mergeImportedSettings(current, part.manifest.settings, { preserveInternalIds: true }),
-        state.settings,
+        current.settings,
       )
-      state.setSettings(settings)
+      current.setSettings(settings)
     }
 
     let msg = '数据已成功导入'

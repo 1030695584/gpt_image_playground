@@ -22,6 +22,18 @@ export function getPresetProfileIds() {
   return new Set(presetProfiles.map((profile) => profile.id))
 }
 
+export function getPresetProviderIds() {
+  return new Set(presetProviders.map((provider) => provider.id))
+}
+
+export function getPresetConfig() {
+  if (presetProfiles.length === 0 && presetProviders.length === 0) return null
+  return {
+    customProviders: presetProviders.map((provider) => ({ ...provider })),
+    profiles: presetProfiles.map((profile) => ({ ...profile })),
+  }
+}
+
 export function getDefaultPresetProfileId() {
   return defaultPresetProfileId
 }
@@ -60,11 +72,21 @@ export function isPresetProviderLocked(id: string) {
   return isPresetConfigParamsLocked() && isPresetProvider(id)
 }
 
-export function enforcePresetConfigPolicy(settings: AppSettings): AppSettings {
+export function isPresetProviderDeletionPrevented(id: string, profiles: ApiProfile[]) {
+  if (!isPresetProvider(id)) return false
+  if (isPresetConfigDeletionPrevented()) return true
+  return profiles.some((profile) => profile.provider === id && isPresetProfileLocked(profile.id))
+}
+
+export function enforcePresetConfigPolicy(
+  settings: AppSettings,
+  options: { dismissedPresetProviderIds?: string[] } = {},
+): AppSettings {
   const presetConfigOnly = isPresetConfigOnlyEnabled()
   const paramsLocked = isPresetConfigParamsLocked()
   if (presetProfiles.length === 0) return settings
 
+  const dismissedProviderIds = new Set(options.dismissedPresetProviderIds ?? [])
   const profileIds = getPresetProfileIds()
   const presetProfilesById = new Map(presetProfiles.map((profile) => [profile.id, profile]))
   const presetProvidersById = new Map(presetProviders.map((provider) => [provider.id, provider]))
@@ -73,6 +95,7 @@ export function enforcePresetConfigPolicy(settings: AppSettings): AppSettings {
     if (!preset) return profile.isDefault ? { ...profile, isDefault: undefined } : profile
     return {
       ...(paramsLocked ? preset : profile),
+      apiKey: profile.apiKey,
       provider: paramsLocked || presetConfigOnly ? preset.provider : profile.provider,
       isDefault: profile.id === defaultPresetProfileId ? true : undefined,
     }
@@ -85,11 +108,12 @@ export function enforcePresetConfigPolicy(settings: AppSettings): AppSettings {
   const defaultIdx = profiles.findIndex((profile) => profile.id === defaultPresetProfileId)
   if (defaultIdx > 0) profiles.unshift(...profiles.splice(defaultIdx, 1))
 
-  const customProviders = settings.customProviders.map((provider) => {
+  const customProviders = settings.customProviders.filter((provider) => !dismissedProviderIds.has(provider.id)).map((provider) => {
     const preset = presetProvidersById.get(provider.id)
     return preset && paramsLocked ? preset : provider
   })
   for (const provider of presetProviders) {
+    if (dismissedProviderIds.has(provider.id)) continue
     if (!customProviders.some((item) => item.id === provider.id)) customProviders.push(provider)
   }
   const activeProfileId = presetConfigOnly && !profileIds.has(settings.activeProfileId)

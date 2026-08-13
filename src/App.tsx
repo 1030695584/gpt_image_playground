@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
-import { initStore } from './store'
-import { useStore } from './store'
-import { buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams } from './lib/urlSettings'
+import { initStore, restoreExplicitPresetConfig, useStore } from './store'
+import { buildSettingsFromUrlParams, clearUrlSettingParams, getExplicitUrlSettingsIds, hasUrlSettingParams } from './lib/urlSettings'
 import { createDefaultOpenAIProfile, hasDefaultPresetConfig, isAgentTextApiProfile, normalizeSettings } from './lib/apiProfiles'
 import { getCustomProviderConfigUrl, hasEmbeddedDefaultConfig, loadCustomProviderSettingsFromUrl, loadEmbeddedDefaultConfig } from './lib/customProviderConfigUrl'
 import { getDefaultPresetProfileId, getPresetProfileIds, isPresetConfigOnlyEnabled, setPresetConfig } from './lib/presetConfig'
@@ -43,9 +42,15 @@ export default function App() {
       ? Promise.resolve().then(() => loadEmbeddedDefaultConfig())
       : loadCustomProviderSettingsFromUrl(customProviderConfigUrl)
 
-    const applyUrlSettings = (baseSettings: Partial<AppSettings>) => {
-      const nextSettings = buildSettingsFromUrlParams(baseSettings, searchParams)
-      return Object.keys(nextSettings).length ? nextSettings : baseSettings
+    const applyUrlSettings = async (baseSettings: Partial<AppSettings>) => {
+      const ids = getExplicitUrlSettingsIds(searchParams)
+      const restored = await restoreExplicitPresetConfig(ids)
+      const restoredSettings = useStore.getState().settings
+      const sourceSettings = restored
+        ? { ...restoredSettings, ...baseSettings, customProviders: restoredSettings.customProviders, profiles: restoredSettings.profiles }
+        : baseSettings
+      const nextSettings = buildSettingsFromUrlParams(sourceSettings, searchParams)
+      return Object.keys(nextSettings).length ? nextSettings : sourceSettings
     }
 
     const clearAppliedUrlSettings = () => {
@@ -74,12 +79,12 @@ export default function App() {
         if (importedSettings) {
           await state.setPresetImportedSettings(importedSettings)
         } else if (state.settings.profiles.some((profile) => profile.isDefault)) {
-          useStore.setState({ dismissedPresetProfileIds: [] })
+          useStore.setState({ dismissedPresetProfileIds: [], dismissedPresetProviderIds: [] })
           state.setSettings({
             profiles: state.settings.profiles.map((profile) => profile.isDefault ? { ...profile, isDefault: undefined } : profile),
           })
         } else {
-          useStore.setState({ dismissedPresetProfileIds: [] })
+          useStore.setState({ dismissedPresetProfileIds: [], dismissedPresetProviderIds: [] })
         }
 
         const current = useStore.getState()
@@ -99,15 +104,17 @@ export default function App() {
                 : defaultPresetId ?? [...presetIds][0],
             })
           : current.settings
-        current.setSettings(applyUrlSettings(settings))
+        current.setSettings(await applyUrlSettings(settings))
         clearAppliedUrlSettings()
       })
       .catch((error) => {
         console.warn('Failed to import preset config:', error)
         setPresetConfig(null)
         const state = useStore.getState()
-        state.setSettings(applyUrlSettings(state.settings))
-        clearAppliedUrlSettings()
+        void applyUrlSettings(state.settings).then((settings) => {
+          useStore.getState().setSettings(settings)
+          clearAppliedUrlSettings()
+        })
       })
   }, [])
 

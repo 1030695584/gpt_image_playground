@@ -469,6 +469,17 @@ describe('mergeImportedSettings', () => {
     expect(merged.profiles.map((profile) => profile.id)).toEqual([profileA.id, profileB.id])
   })
 
+  it('strips the default preset marker from trusted backup imports', () => {
+    const profile = createDefaultOpenAIProfile({ id: 'backup-profile', isDefault: true })
+    const merged = mergeImportedSettings(DEFAULT_SETTINGS, {
+      ...DEFAULT_SETTINGS,
+      profiles: [profile],
+      activeProfileId: profile.id,
+    }, { preserveInternalIds: true })
+
+    expect(merged.profiles[0]).toMatchObject({ id: profile.id, isDefault: undefined })
+  })
+
   it('preserves distinct provider and profile IDs with identical content', () => {
     const providerA = { id: 'provider-a', name: 'Same Provider', submit: { path: 'generate' } }
     const providerB = { id: 'provider-b', name: 'Same Provider', submit: { path: 'generate' } }
@@ -541,6 +552,23 @@ describe('mergePresetImportedSettings', () => {
 
     expect(merged.profiles[0]).toMatchObject({ id: 'source-profile', model: 'model-v2' })
     expect(merged.customProviders[0]).toMatchObject({ id: 'source-provider', submit: { path: 'v2/generate' } })
+  })
+
+  it('keeps the local API key while updating other locked preset parameters', () => {
+    const initialConfig = createConfig('model-v1', 'old/generate')
+    initialConfig.profiles[0].apiKey = 'deployed-key'
+    const current = mergeDefaultImportedSettings(DEFAULT_SETTINGS, initialConfig, { lockPresetParams: true }).settings
+    expect(current.profiles[0].apiKey).toBe('deployed-key')
+
+    current.profiles[0].apiKey = 'user-key'
+    const nextConfig = createConfig('model-v2', 'v2/generate')
+    nextConfig.profiles[0].apiKey = 'new-deployed-key'
+    const updated = mergeDefaultImportedSettings(current, nextConfig, { lockPresetParams: true }).settings
+    nextConfig.profiles[0].apiKey = ''
+    const cleared = mergeDefaultImportedSettings(updated, nextConfig, { lockPresetParams: true }).settings
+
+    expect(updated.profiles[0]).toMatchObject({ apiKey: 'user-key', model: 'model-v2' })
+    expect(cleared.profiles[0].apiKey).toBe('user-key')
   })
 
   it('preserves the saved profile order while updating locked presets by ID', () => {
@@ -833,6 +861,49 @@ describe('mergePresetImportedSettings', () => {
 
     expect(merged.profiles.map((profile) => profile.id)).toEqual(['user-profile'])
     expect(merged.activeProfileId).toBe('user-profile')
+  })
+
+  it('keeps a dismissed preset provider deleted while preset parameters are unlocked', () => {
+    const config = createConfig('preset-model', 'generate')
+    const current = mergeDefaultImportedSettings(DEFAULT_SETTINGS, config).settings
+    const switched = switchApiProfileProvider(current.profiles[0], 'openai')
+    const deleted = normalizeSettings({
+      ...current,
+      customProviders: [],
+      profiles: [{ ...switched, model: 'local-openai-model' }],
+    })
+
+    const merged = mergeDefaultImportedSettings(deleted, config, {
+      dismissedPresetProviderIds: ['source-provider'],
+    }).settings
+
+    expect(merged.customProviders).toEqual([])
+    expect(merged.profiles[0]).toMatchObject({
+      id: 'source-profile',
+      provider: 'openai',
+      model: 'local-openai-model',
+    })
+  })
+
+  it('respects a filtered preset provider dismissal when locking is enabled', () => {
+    const config = createConfig('preset-model', 'generate')
+    const current = mergeDefaultImportedSettings(DEFAULT_SETTINGS, config).settings
+    const user = createDefaultFalProfile({ id: 'user-profile' })
+    const deleted = normalizeSettings({
+      ...current,
+      customProviders: [],
+      profiles: [user],
+      activeProfileId: user.id,
+    })
+
+    const merged = mergeDefaultImportedSettings(deleted, config, {
+      lockPresetParams: true,
+      dismissedPresetProfileIds: ['source-profile'],
+      dismissedPresetProviderIds: ['source-provider'],
+    }).settings
+
+    expect(merged.customProviders).toEqual([])
+    expect(merged.profiles).toEqual([user])
   })
 
   it('requires exactly one default when deploying multiple profiles', () => {

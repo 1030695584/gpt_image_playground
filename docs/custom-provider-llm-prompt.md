@@ -11,7 +11,7 @@
 2. 如果当前环境支持读取链接，主动读取；否则要求用户粘贴文档内容。
 3. 在未获得文档前不要猜测，不要生成占位配置。
 4. 从文档中判断提交接口、图生图接口、异步任务查询接口、状态值、结果图片路径。
-5. 如果文档中明确了默认模型 ID 或 API Base URL，在 profiles 中填入；否则留空，由用户稍后填写。
+5. 如果文档中明确了默认模型 ID 或 API Base URL，在 profiles 中填入；如果未明确模型 ID，model 使用 "gpt-image-2"；如果未明确 API Base URL，baseUrl 留空，由用户稍后填写。
 6. 输出最终 JSON；不要索要 API Key。
 
 # 输出结构
@@ -71,7 +71,9 @@ multipart files 示例：
 - model：模型 ID。如果 API 文档明确了默认模型，填入该值；否则使用 "gpt-image-2"。
 - apiMode：固定为 "images"。
 - apiProxy：可选。仅同步自定义服务商可以设为 true，用于配合部署端 API 代理隐藏真实上游地址；包含 taskIdPath 或 poll 的异步任务配置不要开启，应用不支持异步自定义服务商走代理。
-- isDefault：仅 profiles 包含多个配置时，为默认预置配置填写 true，其他普通预置配置省略；只能有一个配置为 true。只有一个配置时不要填写。所有预置配置都不可删除；默认预置配置还会固定置顶且不可拖动，普通预置配置可以拖动排序；启用“只展示预置配置”后，仍可在所有预置配置之间切换，但不能拖动。
+- isDefault：仅 profiles 包含多个配置时，为默认预置配置填写 true，其他配置省略；只能有一个配置为 true。只有一个配置时不要填写。默认项固定置顶且不可拖动，其他项可以拖动排序。
+
+部署开关边界：LOCK_PRESET_CONFIG_PARAMS 锁定预置 profile 除 API Key 外的参数，禁止编辑预置 provider Manifest；provider 被当前锁定预置 profile 引用时不可删除，解除引用后可删除。PREVENT_PRESET_CONFIG_DELETION 禁止删除预置 profile 和 provider；SHOW_PRESET_CONFIG_ONLY 只允许使用当前部署的预置 profile，并禁止创建、复制、删除、拖动、切换 provider 和管理自定义 provider。API Key 始终可编辑。
 
 profiles 中不要包含 apiKey（用户导入后自行填写）。
 
