@@ -70,6 +70,8 @@ export interface CustomProviderDefinition {
 
 export interface ApiProfile {
   id: string
+  /** 当前部署指定的默认预置配置。 */
+  isDefault?: boolean
   name: string
   provider: ApiProvider
   baseUrl: string

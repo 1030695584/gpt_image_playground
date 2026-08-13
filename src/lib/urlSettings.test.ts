@@ -12,10 +12,14 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-async function importDefaultConfigOnlyUrlSettings() {
+async function importPresetConfigOnlyUrlSettings(options: { locked?: boolean } = {}) {
   vi.resetModules()
-  vi.stubEnv('VITE_SHOW_DEFAULT_CONFIG_ONLY', 'true')
+  vi.stubEnv('VITE_SHOW_PRESET_CONFIG_ONLY', 'true')
+  if (options.locked) vi.stubEnv('VITE_LOCK_PRESET_CONFIG_PARAMS', 'true')
   vi.stubEnv('VITE_DEFAULT_API_URL', 'https://default.example.com/v1')
+  const apiProfiles = await import('./apiProfiles')
+  const presetConfig = await import('./presetConfig')
+  presetConfig.setPresetConfig({ customProviders: [], profiles: [apiProfiles.createDefaultOpenAIProfile()] })
   return import('./urlSettings')
 }
 
@@ -36,6 +40,44 @@ describe('URL settings params', () => {
       apiKey: 'test-key',
       model: DEFAULT_IMAGES_MODEL,
     })
+  })
+
+  it('uses and updates the profile ID from an OpenAI share URL', () => {
+    const current = normalizeSettings(DEFAULT_SETTINGS)
+    const first = normalizeSettings({
+      ...current,
+      ...buildSettingsFromUrlParams(current, new URLSearchParams('profileId=shared-openai&apiUrl=https://api.example.com/v1&model=model-v1')),
+    })
+    const second = normalizeSettings({
+      ...first,
+      ...buildSettingsFromUrlParams(first, new URLSearchParams('profileId=shared-openai&apiUrl=https://api.example.com/v2&model=model-v2')),
+    })
+
+    expect(second.profiles.filter((profile) => profile.id === 'shared-openai')).toHaveLength(1)
+    expect(second.profiles.find((profile) => profile.id === 'shared-openai')).toMatchObject({
+      baseUrl: 'https://api.example.com/v2/v1',
+      model: 'model-v2',
+    })
+  })
+
+  it('generates unique IDs for ID-less profiles in settings URLs', () => {
+    const params = new URLSearchParams()
+    params.set('settings', JSON.stringify({
+      customProviders: [{ id: 'url-provider', name: 'URL Provider', submit: { path: 'generate' } }],
+      profiles: [
+        { provider: 'url-provider', model: 'model-a' },
+        { provider: 'url-provider', model: 'model-b' },
+      ],
+    }))
+
+    const next = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      ...buildSettingsFromUrlParams(DEFAULT_SETTINGS, params),
+    })
+    const ids = next.profiles.map((profile) => profile.id)
+
+    expect(ids).toHaveLength(2)
+    expect(new Set(ids).size).toBe(2)
   })
 
   it('uses model from URL params for OpenAI profiles', () => {
@@ -369,7 +411,7 @@ describe('URL settings params', () => {
   })
 
   it('patches the active profile instead of creating a new one when only default config is shown', async () => {
-    const { buildSettingsFromUrlParams } = await importDefaultConfigOnlyUrlSettings()
+    const { buildSettingsFromUrlParams } = await importPresetConfigOnlyUrlSettings()
     const current = normalizeSettings(DEFAULT_SETTINGS)
     const next = normalizeSettings({
       ...current,
@@ -391,7 +433,7 @@ describe('URL settings params', () => {
   })
 
   it('ignores imported custom providers and non-default provider profiles when only default config is shown', async () => {
-    const { buildSettingsFromUrlParams } = await importDefaultConfigOnlyUrlSettings()
+    const { buildSettingsFromUrlParams } = await importPresetConfigOnlyUrlSettings()
     const importedSettings = {
       customProviders: [{
         id: 'custom-json',
@@ -438,7 +480,7 @@ describe('URL settings params', () => {
   })
 
   it('patches from a matching imported profile without importing custom providers when only default config is shown', async () => {
-    const { buildSettingsFromUrlParams } = await importDefaultConfigOnlyUrlSettings()
+    const { buildSettingsFromUrlParams } = await importPresetConfigOnlyUrlSettings()
     const importedSettings = {
       customProviders: [{
         id: 'custom-json',
@@ -502,7 +544,7 @@ describe('URL settings params', () => {
   })
 
   it('does not switch away from the default custom provider when only default config is shown', async () => {
-    const { buildSettingsFromUrlParams } = await importDefaultConfigOnlyUrlSettings()
+    const { buildSettingsFromUrlParams } = await importPresetConfigOnlyUrlSettings()
     const customProvider = {
       id: 'custom-default',
       name: 'Custom Default',
@@ -578,5 +620,14 @@ describe('URL settings params', () => {
       timeout: 240,
       apiMode: 'images',
     })
+  })
+
+  it('ignores URL parameter changes when preset parameters are locked', async () => {
+    const { buildSettingsFromUrlParams } = await importPresetConfigOnlyUrlSettings({ locked: true })
+    const current = normalizeSettings(DEFAULT_SETTINGS)
+
+    expect(buildSettingsFromUrlParams(current, new URLSearchParams(
+      'apiUrl=https://changed.example.com/v1&apiKey=changed-key&model=changed-model',
+    ))).toEqual({})
   })
 })

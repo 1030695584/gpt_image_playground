@@ -19,7 +19,8 @@ import type {
   StoredImageThumbnail,
 } from './types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
-import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
+import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, mergeImportedSettings, mergePresetImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
+import { enforcePresetConfigPolicy, getPresetProfileIds, isPresetConfigDeletionPrevented, isPresetConfigOnlyEnabled, isPresetConfigParamsLocked, isPresetProfile } from './lib/presetConfig'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
@@ -275,6 +276,12 @@ interface AppState {
   // 设置
   settings: AppSettings
   setSettings: (s: Partial<AppSettings>) => void
+  setPresetImportedSettings: (
+    importedSettings: Partial<AppSettings> | unknown,
+    transform?: (settings: AppSettings) => Partial<AppSettings>,
+  ) => Promise<void>
+  dismissedPresetProfileIds: string[]
+  dismissPresetProfile: (id: string) => void
   dismissedCodexCliPrompts: string[]
   dismissCodexCliPrompt: (key: string) => void
 
@@ -557,6 +564,12 @@ export const useStore = create<AppState>()(
 
       // Settings
       settings: { ...DEFAULT_SETTINGS },
+      dismissedPresetProfileIds: [],
+      dismissPresetProfile: (id) => set((state) => ({
+        dismissedPresetProfileIds: state.dismissedPresetProfileIds.includes(id)
+          ? state.dismissedPresetProfileIds
+          : [...state.dismissedPresetProfileIds, id],
+      })),
       setSettings: (s) => set((st) => {
         const previous = normalizeSettings(st.settings)
         const incoming = s as Partial<AppSettings>
@@ -589,7 +602,7 @@ export const useStore = create<AppState>()(
               : profile,
           )
         }
-        const settings = normalizeSettings(merged)
+        const settings = normalizeSettings(enforcePresetConfigPolicy(merged))
         const shouldClearReusedProfile = st.reusedTaskApiProfileId && settings.activeProfileId === st.reusedTaskApiProfileId
         return {
           settings,
@@ -598,6 +611,26 @@ export const useStore = create<AppState>()(
             : {}),
         }
       }),
+      setPresetImportedSettings: async (importedSettings, transform) => {
+        set((state) => {
+          const presetIds = getPresetProfileIds()
+          const dismissedPresetProfileIds = state.dismissedPresetProfileIds.filter((id) => presetIds.has(id))
+          const merged = mergePresetImportedSettings(state.settings, importedSettings, {
+            lockPresetParams: isPresetConfigParamsLocked(),
+            dismissedPresetProfileIds: isPresetConfigDeletionPrevented() ? [] : dismissedPresetProfileIds,
+          })
+          const settings = normalizeSettings(enforcePresetConfigPolicy(normalizeSettings(transform?.(merged.settings) ?? merged.settings)))
+          const shouldClearReusedProfile = state.reusedTaskApiProfileId && settings.activeProfileId === state.reusedTaskApiProfileId
+          return {
+            settings,
+            dismissedPresetProfileIds,
+            reusedTaskApiProfileId: shouldClearReusedProfile ? null : state.reusedTaskApiProfileId,
+            ...(shouldClearReusedProfile
+              ? { reusedTaskApiProfileName: null, reusedTaskApiProfileMissing: false }
+              : {}),
+          }
+        })
+      },
       dismissedCodexCliPrompts: [],
       dismissCodexCliPrompt: (key) => set((st) => ({
         dismissedCodexCliPrompts: st.dismissedCodexCliPrompts.includes(key)
@@ -1096,27 +1129,20 @@ export function showCodexCliPrompt(force = false, reason = '接口返回的提�
 
 function getFalRecoveryProfile(settings: AppSettings, task: TaskRecord) {
   const taskProfile = getTaskApiProfile(settings, task)
-  if (taskProfile?.provider === 'fal') return taskProfile
+  if (taskProfile?.provider === 'fal' && task.apiProvider === 'fal') return taskProfile
   return null
 }
 
 function getCustomRecoveryProfile(settings: AppSettings, task: TaskRecord) {
-  const provider = task.apiProvider
-  if (!provider || provider === 'openai' || provider === 'fal') return null
   const taskProfile = getTaskApiProfile(settings, task)
-  if (taskProfile?.provider === provider) return taskProfile
+  if (taskProfile && taskProfile.provider === task.apiProvider && taskProfile.provider !== 'openai' && taskProfile.provider !== 'fal') return taskProfile
   return null
 }
 
 export function getTaskApiProfile(settings: AppSettings, task: TaskRecord): ApiProfile | null {
   const normalized = normalizeSettings(settings)
-  const provider = task.apiProvider
-
   if (!task.apiProfileId) return null
-
-  const byId = normalized.profiles.find((profile) => profile.id === task.apiProfileId)
-  if (byId && (!provider || byId.provider === provider)) return byId
-  return null
+  return normalized.profiles.find((profile) => profile.id === task.apiProfileId) ?? null
 }
 
 function createSettingsForApiProfile(settings: AppSettings, profile: ApiProfile): AppSettings {
@@ -3453,7 +3479,7 @@ async function executeTask(taskId: string) {
   }
   const activeProfile = taskProfile ?? getActiveApiProfile(settings)
   const requestSettings = createSettingsForApiProfile(settings, activeProfile)
-  const taskProvider = task.apiProvider ?? activeProfile.provider
+  const taskProvider = taskProfile?.provider ?? task.apiProvider ?? activeProfile.provider
   let falRequestInfo: { requestId: string; endpoint: string } | null = task.falRequestId && task.falEndpoint
         ? { requestId: task.falRequestId, endpoint: task.falEndpoint }
     : null
@@ -3791,7 +3817,8 @@ export async function reuseConfig(task: TaskRecord) {
   const { settings, setPrompt, setParams, setInputImages, setMaskDraft, clearMaskDraft, showToast, setConfirmDialog, setReusedTaskApiProfile } = useStore.getState()
   const normalizedSettings = normalizeSettings(settings)
   const currentProfile = getActiveApiProfile(settings)
-  const matchedProfile = normalizedSettings.reuseTaskApiProfileTemporarily ? getTaskApiProfile(normalizedSettings, task) : null
+  const taskProfile = normalizedSettings.reuseTaskApiProfileTemporarily ? getTaskApiProfile(normalizedSettings, task) : null
+  const matchedProfile = taskProfile && (!isPresetConfigOnlyEnabled() || isPresetProfile(taskProfile.id)) ? taskProfile : null
   const shouldTemporarilyReuseProfile = Boolean(matchedProfile && matchedProfile.id !== currentProfile.id)
   const missingReusedProfile = normalizedSettings.reuseTaskApiProfileTemporarily && !matchedProfile
   const taskProfileName = matchedProfile?.name ?? getTaskApiProfileName(task)
@@ -4183,7 +4210,7 @@ async function recoverCustomTask(taskId: string) {
   if (!task || !task.customTaskId || task.status === 'done') return
 
   const profile = getCustomRecoveryProfile(settings, task)
-  const customProvider = task.apiProvider ? getCustomProviderDefinition(settings, task.apiProvider) : null
+  const customProvider = profile ? getCustomProviderDefinition(settings, profile.provider) : null
   if (!profile || !customProvider?.poll) {
     scheduleCustomRecovery(taskId)
     return
@@ -4412,7 +4439,7 @@ export async function importData(input: File | File[], options: ImportOptions = 
     if (options.importConfig && settingsManifests.length) {
       const state = useStore.getState()
       const settings = settingsManifests.reduce(
-        (current, part) => mergeImportedSettings(current, part.manifest.settings),
+        (current, part) => mergeImportedSettings(current, part.manifest.settings, { preserveInternalIds: true }),
         state.settings,
       )
       state.setSettings(settings)

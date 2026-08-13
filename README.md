@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 # 🎨 GPT Image Playground
 
@@ -180,22 +180,63 @@
 
 ## 🚀 部署与使用
 
-支持多种部署与开发方式。无论使用哪种方式，你都可以预设默认的 API 节点。
+支持多种部署与开发方式。
+
+所有部署方式都可以通过环境变量提供"预置配置"——部署端预先加入用户配置列表的 API 配置。用户打开页面时会自动看到这些配置，无需手动创建，格式和用户自己创建的配置完全一致。
+
+环境变量的值支持三种填写方式：
+
+| 填写方式 | 说明 | 示例 |
+|------|------|------|
+| **直接填写 API 地址** | 自动创建一个 OpenAI 兼容的默认预置配置，填好 API URL、默认模型等基础参数，用户只需补充 API Key。适合只提供一个配置的部署。 | `https://api.openai.com/v1` |
+| **API 地址 + 查询参数** | 在地址后追加参数，可同时预填 Key、模型等字段。 | `https://api.openai.com/v1?model=gpt-image-2&apiMode=responses` |
+| **JSON 配置文件 / 分享链接** | 通过 JSON 文件（远程 URL / 本地路径）或含 `?settings=` 参数的分享链接提供完整预置配置，支持预置多个配置（OpenAI 兼容、fal.ai 或自定义服务商）。 | 详见 [预置配置 JSON 格式](#preset-config-json) |
+
+**预置配置行为**
+
+| 项目 | 默认行为 | 开启"锁定参数"后 |
+|------|------|------|
+| API URL（`baseUrl`） | 重新部署后自动更新到已有用户 | 同左 |
+| 模型、API Key、超时等参数 | 用户可修改，保留本地值，重新部署不覆盖 | 用户无法修改，强制跟随部署端 |
+| 排序 | 普通预置可拖动，排序保存在浏览器，重新部署不覆盖 | 同左 |
+| 删除 | 允许删除（至少保留一项），删除保存在浏览器，重新部署不恢复。可通过环境变量禁止。 | 同左 |
+| 默认项 | 单个自动成为默认；多个时必须有一项 `isDefault: true`。固定置顶不可拖动，新浏览器首次选中。 | 同左 |
+| 部署端移除的旧预置 | 恢复为可编辑、可删除的普通配置 | 同左 |
+
+**部署环境变量一览**
+
+| 构建时（Vercel / Cloudflare / 本地） | Docker 运行时 | 说明 |
+|------|------|------|
+| `VITE_DEFAULT_API_URL` | `DEFAULT_API_URL` | 预置配置值（详见 [预置配置 JSON 格式](#preset-config-json)） |
+| `VITE_LOCK_PRESET_CONFIG_PARAMS=true` | `LOCK_PRESET_CONFIG_PARAMS=true` | 锁定预置配置中除 API URL 外的参数，使其持续跟随部署端更新；API URL 无需开启此项也会更新，用户排序不受影响 |
+| `VITE_PREVENT_PRESET_CONFIG_DELETION=true` | `PREVENT_PRESET_CONFIG_DELETION=true` | 不允许删除当前部署的预置配置；默认允许删除 |
+| `VITE_SHOW_PRESET_CONFIG_ONLY=true` | `SHOW_PRESET_CONFIG_ONLY=true` | 只展示预置配置，不能新建、复制、删除、拖动或切换服务商类型 |
+| — | `ENABLE_API_PROXY=true` | 开启 Nginx 同源 API 代理 |
+| — | `API_PROXY_URL` | 代理转发的完整 API 基础地址 |
+| — | `LOCK_API_PROXY=true` | 强制锁定代理为开启 |
+| — | `HOST` / `PORT` | Nginx 监听地址和端口（默认 `0.0.0.0:80`） |
+
+> 旧变量 `VITE_SHOW_DEFAULT_CONFIG_ONLY`／`SHOW_DEFAULT_CONFIG_ONLY` 仍可使用，等同于对应的新变量。
+
 
 <details>
 <summary><strong>▲ 方式一：Vercel 一键部署 (推荐)</strong></summary>
 
+**预置配置**
+
+在 Vercel 项目的 **Settings → Environment Variables** 中设置 `VITE_DEFAULT_API_URL`，支持上述三种填写方式（详见 [预置配置 JSON 格式](#preset-config-json)）。
+
+Vercel 会在构建时读取该变量。若值指向远程 `.json` 文件或本地路径，内容会在构建时抓取并内嵌到页面，用户浏览器不需要访问原始地址。
+
+```dotenv
+VITE_DEFAULT_API_URL=https://api.openai.com/v1
+```
+
+**部署**
+
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FCookSleep%2Fgpt_image_playground&project-name=gpt-image-playground&repository-name=gpt-image-playground)
 
-点击上方按钮导入仓库即可，Vercel 会自动执行构建并部署静态文件。
-
-**配置 `VITE_DEFAULT_API_URL`**：在 Vercel 项目的 **Settings → Environment Variables** 中添加，然后重新部署。该变量支持三种填法：
-
-1. **普通 API 地址**（如 `https://api.openai.com/v1`）→ 页面打开时自动填入默认 API 地址。
-2. **带参数的应用链接**（如 `https://你的域名?apiUrl=...&model=...`）→ 同时预设 API 地址、API Key、模型等多个字段。**可用参数见：[URL 传参快速填充](#url-quick-fill)。**
-3. **自定义服务商链接**（公开可访问的 `.json` 文件地址，或含 `?settings={URL 编码后的 JSON}` 参数的分享链接）→ 页面启动时自动导入自定义服务商，不会把该链接当作 API 请求地址。**配置和示例见：[自定义服务商](#custom-provider-config)。**
-
-**仅展示默认配置**：设置 `VITE_SHOW_DEFAULT_CONFIG_ONLY=true` 后，前端会隐藏多配置切换和服务商类型切换，只允许使用默认配置。
+点击上方按钮导入仓库即可，Vercel 会自动执行构建并部署静态文件。添加或修改环境变量后需要重新部署。
 
 **绑定自定义域名 (国内直连)**：Vercel 默认分配的 `.vercel.app` 域名在国内通常无法直接访问。如果你希望在国内直连访问，请在 Vercel 项目的 **Settings → Domains** 中绑定你自己的域名。
 
@@ -215,6 +256,18 @@
 
 项目已内置 Wrangler 配置，可将 Vite 构建产物作为 Cloudflare Workers 静态资源部署。
 
+**预置配置**
+
+在执行构建前设置环境变量 `VITE_DEFAULT_API_URL`，支持上述三种填写方式（详见 [预置配置 JSON 格式](#preset-config-json)）。Cloudflare Workers 不会在部署后改写静态文件，因此必须在构建前完成设置。
+
+构建时若值指向远程 `.json` 文件或本地路径，内容会自动内嵌到页面。
+
+```dotenv
+VITE_DEFAULT_API_URL=https://api.openai.com/v1
+```
+
+**部署**
+
 **1. 登录 Cloudflare**
 
 ```bash
@@ -229,70 +282,45 @@ npm run deploy:cf
 
 部署脚本会先执行 `npm run build`，再通过 `wrangler deploy` 上传 `dist/` 目录。
 
-**配置默认 API URL**：Cloudflare Workers 的环境变量不会自动改写已经构建好的静态文件。若需预设默认 API 地址，请在构建前设置 `VITE_DEFAULT_API_URL` 后再部署。
-
-```bash
-VITE_DEFAULT_API_URL=https://api.openai.com/v1 npm run deploy:cf
-```
-
-PowerShell 示例：
-
-```powershell
-$env:VITE_DEFAULT_API_URL="https://api.openai.com/v1"; npm run deploy:cf
-```
-
-`VITE_DEFAULT_API_URL` 支持三种填法：
-
-1. **普通 API 地址**（如 `https://api.openai.com/v1`）→ 页面打开时自动填入默认 API 地址。
-2. **带参数的应用链接**（如 `https://你的域名?apiUrl=...&model=...`）→ 同时预设 API 地址、API Key、模型等多个字段。**可用参数见：[URL 传参快速填充](#url-quick-fill)。**
-3. **自定义服务商链接**（公开可访问的 `.json` 文件地址，或含 `?settings={URL 编码后的 JSON}` 参数的分享链接）→ 页面启动时自动导入自定义服务商，不会把该链接当作 API 请求地址。**配置和示例见：[自定义服务商](#custom-provider-config)。**
-
-**仅展示默认配置**：构建前设置 `VITE_SHOW_DEFAULT_CONFIG_ONLY=true` 后，前端会隐藏多配置切换和服务商类型切换，只允许使用默认配置。
-
 </details>
 
 <details>
 <summary><strong>🐳 方式三：Docker 部署</strong></summary>
 
-官方镜像已发布至 GitHub Container Registry。Docker 部署支持在运行时注入默认配置。
+官方镜像已发布至 GitHub Container Registry。
 
-**环境变量说明：**
+**环境变量**
 
-- `DEFAULT_API_URL`：设置默认 API 配置，支持三种填法：
-  1. **普通 API 地址**（如 `https://api.openai.com/v1`）→ 页面打开时自动填入默认 API 地址。
-  2. **带参数的应用链接**（如 `https://你的域名?apiUrl=...&model=...`）→ 同时预设 API 地址、API Key、模型等多个字段。**可用参数见：[URL 传参快速填充](#url-quick-fill)。**
-  3. **自定义服务商链接**（公开可访问的 `.json` 文件地址，或含 `?settings={URL 编码后的 JSON}` 参数的分享链接）→ 页面启动时自动导入自定义服务商。**配置和示例见：[自定义服务商](#custom-provider-config)。**
-- `API_PROXY_URL`：配置内置代理实际转发到的完整 API 基础地址（仅开启代理时有效）。代理不会自动补 `/v1`，OpenAI 兼容接口通常必须填写到版本前缀，如 `https://api.openai.com/v1`。
-- `ENABLE_API_PROXY`：设为 `true` 开启容器内置 Nginx 同源代理，用于解决浏览器跨域（CORS）限制。开启后，前端 **API 代理** 开关默认开启，浏览器会请求同源的 `/api-proxy/{接口相对路径}`，再由 Nginx 拼接到 `API_PROXY_URL` 后转发；用户仍可在设置中手动关闭。
-- `LOCK_API_PROXY`：设为 `true` 时，在 `ENABLE_API_PROXY=true` 的前提下将前端 **API 代理** 开关强制锁定为开启，用户无法关闭。
-- `SHOW_DEFAULT_CONFIG_ONLY`：设为 `true` 后，前端会隐藏多配置切换和服务商类型切换，只允许使用默认配置。
-- `HOST` / `PORT`：指定容器内 Nginx 监听的地址和端口（默认 `0.0.0.0:80`）。
+| 变量 | 说明 |
+|------|------|
+| `DEFAULT_API_URL` | 预置配置，支持上述三种填写方式（详见 [预置配置 JSON 格式](#preset-config-json)）。若值指向 `.json` 文件或容器内路径，容器启动时自动读取并内嵌到页面。宿主机文件需通过 volume 挂载 |
+| `ENABLE_API_PROXY=true` | 开启 Nginx 同源代理，请求发往 `/api-proxy/{路径}` 再转发到 `API_PROXY_URL` |
+| `API_PROXY_URL` | 代理转发的完整 API 基础地址（不自动补 `/v1`） |
+| `LOCK_API_PROXY=true` | 强制锁定代理为开启，用户无法关闭 |
+| `HOST` / `PORT` | Nginx 监听地址和端口，默认 `0.0.0.0:80` |
 
-> ⚠️ **安全警告**：开启 API 代理后，任何人都能将你的服务器作为代理来请求目标 API。建议仅在有访问控制（如 IP 白名单）或本地网络中开启。
+> 开启 API 代理后，任何人都能将你的服务器作为代理来请求目标 API。建议仅在有访问控制（如 IP 白名单）或本地网络中开启。
 
-> 💡 **隐藏真实 API 地址**：如果不希望用户在前端看到真实的 API 上游地址，可以配合 `ENABLE_API_PROXY=true` 和 `LOCK_API_PROXY=true` 强制所有请求走服务器代理，再将 `API_PROXY_URL` 设为真实的 API 上游地址。根据使用的服务商类型，`DEFAULT_API_URL` 的填法不同：
->
-> - **OpenAI 兼容接口**：将 `DEFAULT_API_URL` 留空或填写一个占位地址（如 `https://proxy`）。
-> - **自定义服务商**：将 `DEFAULT_API_URL` 设为配置 URL（`.json` 或带 `settings` 参数的分享 URL），配置 JSON 中 profile 的 `baseUrl` 留空或填占位地址，并设置 `apiProxy:true`。
->
-> 这样前端设置页只会显示空值或占位地址，真实 API 地址仅存在于服务器侧的 `API_PROXY_URL`，不会暴露给用户。
->
-> 自定义服务商开启代理仅支持同步返回图片的配置；包含 `taskIdPath` 或 `poll` 的异步任务自定义服务商暂不支持 API 代理。
+> 旧版 `API_URL` 已拆分为 `DEFAULT_API_URL` 和 `API_PROXY_URL`，容器启动时自动兼容，无需立即修改。
 
-> 💡 **兼容迁移**：旧版本中的 `API_URL` 已拆分为 `DEFAULT_API_URL` 和 `API_PROXY_URL`。容器启动时会自动将遗留的 `API_URL` 作为两个新变量的兜底值，实现无缝兼容。建议更新配置文件，逐步迁移至新变量。
+**隐藏真实 API 地址**
 
-**1. Docker CLI 示例**
+配合 `ENABLE_API_PROXY=true` + `LOCK_API_PROXY=true` 可隐藏上游地址：
+
+- OpenAI 兼容接口：`DEFAULT_API_URL` 留空或填占位地址（如 `https://proxy`）。
+- 自定义服务商：JSON 中 profile 的 `baseUrl` 留空并设置 `apiProxy: true`（仅支持同步配置）。
+
+用户只能看到空值或占位地址，真实地址仅存在于 `API_PROXY_URL`。
+
+**Docker CLI 示例**
 
 ```bash
 docker run -d -p 8080:80 \
   -e DEFAULT_API_URL=https://api.openai.com/v1 \
-  -e ENABLE_API_PROXY=true \
-  -e LOCK_API_PROXY=true \
-  -e API_PROXY_URL=https://api.openai.com/v1 \
   ghcr.io/cooksleep/gpt_image_playground:latest
 ```
 
-**隐藏真实 API 地址示例（OpenAI 兼容接口）：**
+开启代理并隐藏真实地址：
 
 ```bash
 docker run -d -p 8080:80 \
@@ -303,24 +331,18 @@ docker run -d -p 8080:80 \
   ghcr.io/cooksleep/gpt_image_playground:latest
 ```
 
-> 上例中设置页的 API URL 为空，实际请求通过代理转发到 `API_PROXY_URL`。
-
-**隐藏真实 API 地址示例（同步自定义服务商）：**
+挂载本地配置文件：
 
 ```bash
 docker run -d -p 8080:80 \
-  -e DEFAULT_API_URL='https://example.com/?settings={"customProviders":[...],"profiles":[{"baseUrl":"","apiProxy":true,...}]}' \
-  -e API_PROXY_URL=https://real-api.example.com/v1 \
-  -e ENABLE_API_PROXY=true \
-  -e LOCK_API_PROXY=true \
+  -v ./gpt-image-config.json:/config/gpt-image-config.json:ro \
+  -e DEFAULT_API_URL=/config/gpt-image-config.json \
   ghcr.io/cooksleep/gpt_image_playground:latest
 ```
 
-> 上例中 `DEFAULT_API_URL` 为同步自定义服务商分享 URL，profile 的 `baseUrl` 留空且 `apiProxy:true`；真实 API 地址仅在 `API_PROXY_URL` 中配置，前端不可见。异步任务自定义服务商暂不支持开启代理。
+使用 host 网络加 `--network host`，修改端口用 `-e PORT=28080`。
 
-*(注：使用 host 网络时加 `--network host`，修改容器监听端口使用 `-e PORT=28080`)*
-
-**2. Docker Compose 示例**
+**Docker Compose 示例**
 
 ```yaml
 services:
@@ -332,7 +354,6 @@ services:
       - "8080:80"
     restart: unless-stopped
 ```
-
 **更新说明：**
 
 使用 `latest` 标签时，重新拉取镜像并重启即可更新（如 `docker compose pull && docker compose up -d`）。若需固定版本可使用官方提供的版本号标签（如 `0.2.x`）。
@@ -342,24 +363,24 @@ services:
 <details>
 <summary><strong>💻 方式四：本地开发与静态构建</strong></summary>
 
-**1. 环境准备与启动**
+**1. 预置配置（可选）**
 
-你可以在项目根目录新建 `.env.local` 文件配置默认 API URL（如 `VITE_DEFAULT_API_URL=https://api.openai.com/v1`）。然后安装依赖并启动：
+在项目根目录新建 `.env.local` 文件，设置 `VITE_DEFAULT_API_URL`，支持上述三种填写方式（详见 [预置配置 JSON 格式](#preset-config-json)）。
 
-`VITE_DEFAULT_API_URL` 支持三种填法：
+开发服务器启动或构建时若值指向远程 `.json` 文件或本地路径，内容会自动内嵌到页面。
 
-1. **普通 API 地址**（如 `https://api.openai.com/v1`）→ 页面打开时自动填入默认 API 地址。
-2. **带参数的应用链接**（如 `https://你的域名?apiUrl=...&model=...`）→ 同时预设 API 地址、API Key、模型等多个字段。**可用参数见：[URL 传参快速填充](#url-quick-fill)。**
-3. **自定义服务商链接**（公开可访问的 `.json` 文件地址，或含 `?settings={URL 编码后的 JSON}` 参数的分享链接）→ 页面启动时自动导入自定义服务商，不会把该链接当作 API 请求地址。**配置和示例见：[自定义服务商](#custom-provider-config)。**
+```dotenv
+VITE_DEFAULT_API_URL=https://api.openai.com/v1
+```
 
-**仅展示默认配置**：在 `.env.local` 中加入 `VITE_SHOW_DEFAULT_CONFIG_ONLY=true` 后，前端会隐藏多配置切换和服务商类型切换，只允许使用默认配置。
+**2. 安装依赖并启动**
 
 ```bash
 npm install
 npm run dev
 ```
 
-**2. 本地开发跨域代理 (可选)**
+**3. 本地开发跨域代理 (可选)**
 
 如果在本地开发时遇到浏览器的 CORS 限制，可开启本地代理转发：
 
@@ -369,7 +390,7 @@ cp dev-proxy.config.example.json dev-proxy.config.json
 
 修改 `dev-proxy.config.json`，将 `target` 设置为真实的完整 API 基础地址。代理不会自动补 `/v1`，OpenAI 兼容接口通常必须填写到版本前缀，如 `https://api.example.com/v1`。重启开发服务器后，在页面设置中开启 **API 代理** 即可（请求将被转发如 `http://localhost:5173/api-proxy/... -> target/...`）。此功能仅在 `npm run dev` 阶段生效，不会影响打包产物。
 
-**3. 本地故障模拟 API (可选)**
+**4. 本地故障模拟 API (可选)**
 
 如果需要复现图片 URL 跨域、接口返回结构异常、原始响应查看等问题，可启动内置模拟服务：
 
@@ -379,7 +400,7 @@ npm run mock:api
 
 使用方式见 [本地故障模拟 API](docs/mock-image-api.md)。
 
-**4. 构建静态产物**
+**5. 构建静态产物**
 
 ```bash
 npm run build
@@ -394,21 +415,21 @@ npm run build
 <a id="url-quick-fill"></a>
 ## 🛠️ URL 传参快速填充
 
-应用支持通过 URL 查询参数快速填入配置，非常适合创建书签或集成分享。根据你的服务商类型，选择对应的方式：
+通过 URL 查询参数快速填入 OpenAI 兼容配置，适合创建书签或集成分享。
 
-**方式一：标准 OpenAI 兼容服务商**
-直接使用简短的查询参数配置：
-- `?apiUrl=https://你的代理地址.com`
-- `?apiKey=sk-xxxx`
-- `?apiMode=images` 或 `?apiMode=responses`（未传时默认为 `images`）
-- `?model=gpt-image-2`（未传时按 `apiMode` 使用默认模型）
-- `?profileName=我的配置`（设置配置名称，未传时默认为 `URL 参数配置`）
-- `?reasoningEffort=high`（Responses API 推理强度，可选 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`）
-- `?codexCli=true`（开启 Codex CLI 兼容模式）
-- `?streamImages=true`（开启流式传输）
-- `?streamPartialImages=2`（请求中间步骤图像数，需配合 `streamImages=true` 使用）
+| 参数 | 说明 | 示例 |
+|------|------|------|
+| `apiUrl` | API Base URL | `?apiUrl=https://api.example.com/v1` |
+| `apiKey` | API Key | `?apiKey=sk-xxxx` |
+| `model` | 模型 ID（未传时按 apiMode 使用默认模型） | `?model=gpt-image-2` |
+| `apiMode` | `images` 或 `responses`，默认 `images` | `?apiMode=responses` |
+| `profileName` | 配置名称，默认"URL 参数配置" | `?profileName=我的配置` |
+| `reasoningEffort` | Responses API 推理强度 | `?reasoningEffort=high` |
+| `codexCli` | Codex CLI 兼容模式 | `?codexCli=true` |
+| `streamImages` | 流式传输 | `?streamImages=true` |
+| `streamPartialImages` | 中间步骤图像数（需配合 streamImages） | `?streamPartialImages=2` |
 
-例如，集成到 New API 的聊天系统：
+集成示例（New API 聊天系统）：
 
 ```text
 https://gpt-image-playground.cooksleep.dev?apiUrl={address}&apiKey={key}&model={model}
@@ -418,62 +439,123 @@ https://gpt-image-playground.cooksleep.dev?apiUrl={address}&apiKey={key}&model={
 https://cooksleep.github.io/gpt_image_playground?apiUrl={address}&apiKey={key}&model={model}
 ```
 
-<a id="custom-provider-config"></a>
-**方式二：自定义服务商**
+<a id="preset-config-json"></a>
+## 📋 预置配置 JSON 格式
 
-当你使用的 API 不是标准 OpenAI 格式时，需要通过“自定义服务商”告诉应用如何调用该接口。配置是一个 JSON，包含两部分：
+使用 JSON 文件或分享链接提供预置配置时，JSON 对象包含两个顶层字段：
 
-- **`customProviders`**：描述请求如何提交、任务如何轮询，以及如何从响应中提取图片。
-- **`profiles`**：对应的 API 配置（服务商 ID、API 地址、模型等）；其中 `provider` 字段必须与 `customProviders` 中某项的 `id` 一致。
+- **`customProviders`**（数组）：自定义服务商 Manifest。如果只用 OpenAI 兼容或 fal.ai，此数组留空 `[]` 即可。
+- **`profiles`**（数组）：预置的 API 配置列表。每项对应用户配置页中的一个配置条目。
 
-**导入方式有两种（任选其一）：**
+### profiles 字段说明
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `id` | 建议填写 | 配置的唯一标识，用于跨部署追踪同一项。未填写时按内容自动生成。 |
+| `name` | 是 | 配置名称，方便用户识别。 |
+| `provider` | 是 | 服务商类型。`"openai"` 为 OpenAI 兼容接口，`"fal"` 为 fal.ai，其他值引用 `customProviders` 中同 ID 的 Manifest。 |
+| `baseUrl` | 是 | API Base URL。OpenAI 兼容接口填入完整地址（如 `https://api.openai.com/v1`）；fal.ai 可留空。 |
+| `apiKey` | 否 | API Key。建议省略，让用户导入后自行填写。 |
+| `model` | 是 | 默认模型 ID。 |
+| `apiMode` | 否 | `"images"` 或 `"responses"`，默认 `"images"`。 |
+| `isDefault` | 否 | 多个 profile 时，为默认项设置 `true`（只能有一个）。单 profile 时不填。 |
+| `timeout` | 否 | 请求超时秒数，默认 300。 |
+| `apiProxy` | 否 | 是否走部署端 API 代理，默认 `false`。 |
+
+### 示例：仅 OpenAI 兼容
+
+```json
+{
+  "customProviders": [],
+  "profiles": [
+    {
+      "id": "my-openai",
+      "name": "我的 OpenAI 配置",
+      "provider": "openai",
+      "baseUrl": "https://api.openai.com/v1",
+      "model": "gpt-image-2"
+    }
+  ]
+}
+```
+
+### 示例：OpenAI 兼容 + fal.ai 多配置
+
+```json
+{
+  "customProviders": [],
+  "profiles": [
+    {
+      "id": "openai-main",
+      "name": "OpenAI",
+      "provider": "openai",
+      "baseUrl": "https://api.openai.com/v1",
+      "model": "gpt-image-2",
+      "isDefault": true
+    },
+    {
+      "id": "fal-profile",
+      "name": "fal.ai",
+      "provider": "fal",
+      "baseUrl": "",
+      "model": "openai/gpt-image-2"
+    }
+  ]
+}
+```
+
+### 如何将预置配置提供给环境变量
+
+预置配置 JSON 可以通过以下三种方式填入部署环境变量（`VITE_DEFAULT_API_URL` 或 Docker 的 `DEFAULT_API_URL`）：
 
 **1. 分享链接（最简单）**
 
-可以直接打开 README 顶部的 [Vercel 在线体验](https://gpt-image-playground.cooksleep.dev) 或 [GitHub Pages 在线体验](https://cooksleep.github.io/gpt_image_playground)，在项目内生成配置后，点“链接按钮”复制 URL。它的 `?settings=` 参数里已经包含了 URL 编码后的完整 JSON，直接填入环境变量即可，无需手动编写 JSON。
-
-操作路径：**设置 - API 配置 - 服务商类型 - 创建自定义服务商 - AI 一键生成与导入**
-
-完成后在 **API 配置 - 当前配置** 右侧点击：
-
-- **链接按钮**：复制含 `?settings=` 参数的分享 URL。复制时可选择不包含 API Key，并使用 `{address}`、`{key}`、`{model}` 等变量便于在 New API 等平台中集成分享。
-- **复制按钮**：将当前配置复制一份到配置列表底部。
-
-**环境变量示例：**
-
-Vercel、Cloudflare 构建和本地 `.env.local`：
+在项目的 [Vercel 在线体验](https://gpt-image-playground.cooksleep.dev) 或 [GitHub Pages 在线体验](https://cooksleep.github.io/gpt_image_playground) 中生成配置后，点"链接按钮"复制含 `?settings=` 参数的 URL，直接填入环境变量即可。复制时可选择不包含 API Key，并使用 `{address}`、`{key}`、`{model}` 等变量便于集成分享。
 
 ```dotenv
 VITE_DEFAULT_API_URL=https://你的域名?settings=%7B%22customProviders%22%3A%5B...%5D%2C%22profiles%22%3A%5B...%5D%7D
 ```
 
-Docker：
+**2. HTTP／HTTPS 配置文件**
 
-```dotenv
-DEFAULT_API_URL=https://你的域名?settings=%7B%22customProviders%22%3A%5B...%5D%2C%22profiles%22%3A%5B...%5D%7D
-```
-
-**2. 公开的 `.json` 文件地址**
-
-将配置 JSON 保存为文件并部署到可访问的 URL。适合配置较长或需要集中管理的场景。
-
-**环境变量示例：**
-
-Vercel、Cloudflare 构建和本地 `.env.local`：
+将 JSON 保存到部署服务器能够访问的 URL（可位于内网，不要求用户浏览器能访问）。构建时或容器启动时会自动读取并内嵌到页面。
 
 ```dotenv
 VITE_DEFAULT_API_URL=https://example.com/gpt-image-config.json
 ```
 
-Docker：
+**3. 本地配置文件**
 
 ```dotenv
-DEFAULT_API_URL=https://example.com/gpt-image-config.json
+VITE_DEFAULT_API_URL=./config/gpt-image-config.json
 ```
 
-页面启动后会读取并解析其中的 JSON：`customProviders` 创建自定义服务商，`profiles` 创建并选中对应的 API 配置。
+Docker 需要通过 volume 挂载宿主机文件到容器内路径：
 
-**`gpt-image-config.json` 配置参考：**
+```bash
+docker run -d -p 8080:80 \
+  -v ./gpt-image-config.json:/config/gpt-image-config.json:ro \
+  -e DEFAULT_API_URL=/config/gpt-image-config.json \
+  ghcr.io/cooksleep/gpt_image_playground:latest
+```
+
+> Docker 环境变量名为 `DEFAULT_API_URL`（不含 `VITE_` 前缀）。
+
+---
+
+<a id="custom-provider-config"></a>
+## 🔌 自定义服务商
+
+当 API 不是标准 OpenAI 格式时，需要在 `customProviders` 中编写 Manifest 来描述请求和响应结构。每个 Manifest 必须有唯一的 `id`，然后在 `profiles` 中通过 `provider` 引用它。
+
+**创建方式：**
+
+1. **在线体验中生成**：打开 [Vercel 在线体验](https://gpt-image-playground.cooksleep.dev) 或 [GitHub Pages 在线体验](https://cooksleep.github.io/gpt_image_playground)，进入 **设置 → API 配置 → 服务商类型 → 创建自定义服务商 → AI 一键生成与导入**，粘贴第三方 API 文档让 AI 生成配置。
+2. **应用内导出**：生成完成后，在 **API 配置 → 当前配置** 右侧点击"链接按钮"复制含 `?settings=` 参数的分享 URL，可直接用作环境变量值。
+
+也可以参考 [自定义服务商 LLM 提示词](docs/custom-provider-llm-prompt.md)，将提示词和第三方 API 文档直接发给任意 LLM，手动获取完整 JSON。
+
+**完整 JSON 示例（含异步任务 Manifest）：**
 
 ```json
 {
@@ -514,17 +596,18 @@ DEFAULT_API_URL=https://example.com/gpt-image-config.json
   ],
   "profiles": [
     {
+      "id": "example-profile",
       "name": "示例异步任务服务商",
       "provider": "custom-example-task",
       "baseUrl": "https://api.example.com/v1",
-      "model": "example-image-model",
+      "model": "gpt-image-2",
       "apiMode": "images"
     }
   ]
 }
 ```
 
-第三方服务商可以参考 [自定义服务商 LLM 提示词](docs/custom-provider-llm-prompt.md)，让 LLM 根据自己的 API 文档生成可导入的完整配置。导入后只需要在设置里补充 API Key。
+示例中的 `example-profile` 是唯一 profile，因此自动成为默认预置配置。若添加更多 profile，需要为其中一项设置 `isDefault: true`。
 
 ---
 

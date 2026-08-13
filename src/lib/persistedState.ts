@@ -7,6 +7,7 @@ import { getPersistableAgentConversations, stripPersistedAgentConversations } fr
 
 export interface PersistedAppState {
   settings: AppSettings
+  dismissedPresetProfileIds?: string[]
   params: TaskParams
   prompt?: string
   inputImages?: InputImage[]
@@ -36,12 +37,13 @@ type PersistedStateSource = Omit<PersistedAppState, 'prompt' | 'inputImages' | '
 
 type PersistedStateFallback = Pick<
   PersistedAppState,
-  'settings' | 'params' | 'dismissedCodexCliPrompts' | 'favoriteCollections' | 'defaultFavoriteCollectionId'
+  'settings' | 'params' | 'dismissedPresetProfileIds' | 'dismissedCodexCliPrompts' | 'favoriteCollections' | 'defaultFavoriteCollectionId'
 > & {
   agentConversations: AgentConversation[]
 }
 
 export type NormalizedPersistedAppState = PersistedAppState & {
+  dismissedPresetProfileIds: string[]
   prompt: string
   inputImages: InputImage[]
   maskDraft: MaskDraft | null
@@ -86,6 +88,7 @@ export function createPersistedState(state: PersistedStateSource, includeLegacyA
   const galleryInputDraft = saveGalleryInputDraft(state)
   return {
     settings,
+    dismissedPresetProfileIds: state.dismissedPresetProfileIds ?? [],
     params: state.params,
     ...(settings.persistInputOnRestart && (state.appMode === 'gallery' || galleryInputDraft)
       ? {
@@ -178,6 +181,7 @@ export function normalizePersistedState(
   return {
     state: {
       settings,
+      dismissedPresetProfileIds: normalizeStringArray(persistedState.dismissedPresetProfileIds, fallback.dismissedPresetProfileIds ?? []),
       params: normalizeParams(persistedState.params, fallback.params),
       dismissedCodexCliPrompts: normalizeStringArray(persistedState.dismissedCodexCliPrompts, fallback.dismissedCodexCliPrompts),
       appMode,

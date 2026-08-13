@@ -64,12 +64,14 @@ multipart files 示例：
 
 ## profiles 元素
 每个元素的字段：
+- id：配置的唯一标识。生成 JSON 时自动创建，建议使用 {provider-id}-profile 或其他不重复的英文 ID。
 - name：配置名称，方便用户识别。
 - provider：对应 customProviders 中某个元素的 id。
 - baseUrl：API Base URL。如果文档明确给出，填入完整基础地址；否则留空字符串 ""。
-- model：模型 ID。如果 API 文档明确了默认模型，填入该值；否则留空字符串 ""。
+- model：模型 ID。如果 API 文档明确了默认模型，填入该值；否则使用 "gpt-image-2"。
 - apiMode：固定为 "images"。
 - apiProxy：可选。仅同步自定义服务商可以设为 true，用于配合部署端 API 代理隐藏真实上游地址；包含 taskIdPath 或 poll 的异步任务配置不要开启，应用不支持异步自定义服务商走代理。
+- isDefault：仅 profiles 包含多个配置时，为默认预置配置填写 true，其他普通预置配置省略；只能有一个配置为 true。只有一个配置时不要填写。所有预置配置都不可删除；默认预置配置还会固定置顶且不可拖动，普通预置配置可以拖动排序；启用“只展示预置配置”后，仍可在所有预置配置之间切换，但不能拖动。
 
 profiles 中不要包含 apiKey（用户导入后自行填写）。
 
@@ -80,13 +82,14 @@ profiles 中不要包含 apiKey（用户导入后自行填写）。
 - 不要输出 API Key、Authorization header。
 - 如果文档返回 task_id，就必须配置 taskIdPath 和 poll。
 - 如果结果 URL 是数组，路径必须写到数组元素，例如 data.result.images.*.url.*。
+- profiles 包含多个配置时，只为默认预置配置输出 isDefault: true，其他普通预置配置省略该字段；只有一个配置时不要输出 isDefault。
 
 ## 同步接口示例
-{"customProviders":[{"id":"custom-example-sync","name":"示例同步服务商","submit":{"path":"images/generations","method":"POST","contentType":"json","body":{"model":"$profile.model","prompt":"$prompt","size":"$params.size","quality":"$params.quality","output_format":"$params.output_format","moderation":"$params.moderation","output_compression":"$params.output_compression","n":"$params.n"},"result":{"imageUrlPaths":["data.*.url"],"b64JsonPaths":["data.*.b64_json"]}},"editSubmit":{"path":"images/edits","method":"POST","contentType":"multipart","body":{"model":"$profile.model","prompt":"$prompt","size":"$params.size","quality":"$params.quality","output_format":"$params.output_format","moderation":"$params.moderation","output_compression":"$params.output_compression","n":"$params.n"},"files":[{"field":"image[]","source":"inputImages","array":true},{"field":"mask","source":"mask"}],"result":{"imageUrlPaths":["data.*.url"],"b64JsonPaths":["data.*.b64_json"]}}}],"profiles":[{"name":"示例同步服务商","provider":"custom-example-sync","baseUrl":"https://api.example.com/v1","model":"example-model-v1","apiMode":"images"}]}
+{"customProviders":[{"id":"custom-example-sync","name":"示例同步服务商","submit":{"path":"images/generations","method":"POST","contentType":"json","body":{"model":"$profile.model","prompt":"$prompt","size":"$params.size","quality":"$params.quality","output_format":"$params.output_format","moderation":"$params.moderation","output_compression":"$params.output_compression","n":"$params.n"},"result":{"imageUrlPaths":["data.*.url"],"b64JsonPaths":["data.*.b64_json"]}},"editSubmit":{"path":"images/edits","method":"POST","contentType":"multipart","body":{"model":"$profile.model","prompt":"$prompt","size":"$params.size","quality":"$params.quality","output_format":"$params.output_format","moderation":"$params.moderation","output_compression":"$params.output_compression","n":"$params.n"},"files":[{"field":"image[]","source":"inputImages","array":true},{"field":"mask","source":"mask"}],"result":{"imageUrlPaths":["data.*.url"],"b64JsonPaths":["data.*.b64_json"]}}}],"profiles":[{"id":"custom-example-sync-profile","name":"示例同步服务商","provider":"custom-example-sync","baseUrl":"https://api.example.com/v1","model":"gpt-image-2","apiMode":"images"}]}
 
 ## 异步接口示例
-{"customProviders":[{"id":"custom-example-async","name":"示例异步服务商","submit":{"path":"images/generations","method":"POST","contentType":"json","query":{"async":"true"},"body":{"model":"$profile.model","prompt":"$prompt","size":"$params.size","n":"$params.n"},"taskIdPath":"data"},"editSubmit":{"path":"images/edits","method":"POST","contentType":"multipart","query":{"async":"true"},"body":{"model":"$profile.model","prompt":"$prompt","size":"$params.size","n":"$params.n"},"files":[{"field":"image[]","source":"inputImages","array":true}],"taskIdPath":"data"},"poll":{"path":"images/tasks/{task_id}","method":"GET","intervalSeconds":5,"statusPath":"data.status","successValues":["SUCCESS"],"failureValues":["FAILURE"],"errorPath":"data.fail_reason","result":{"imageUrlPaths":["data.data.data.*.url"],"b64JsonPaths":["data.data.data.*.b64_json"]}}}],"profiles":[{"name":"示例异步服务商","provider":"custom-example-async","baseUrl":"","model":"","apiMode":"images"}]}
+{"customProviders":[{"id":"custom-example-async","name":"示例异步服务商","submit":{"path":"images/generations","method":"POST","contentType":"json","query":{"async":"true"},"body":{"model":"$profile.model","prompt":"$prompt","size":"$params.size","n":"$params.n"},"taskIdPath":"data"},"editSubmit":{"path":"images/edits","method":"POST","contentType":"multipart","query":{"async":"true"},"body":{"model":"$profile.model","prompt":"$prompt","size":"$params.size","n":"$params.n"},"files":[{"field":"image[]","source":"inputImages","array":true}],"taskIdPath":"data"},"poll":{"path":"images/tasks/{task_id}","method":"GET","intervalSeconds":5,"statusPath":"data.status","successValues":["SUCCESS"],"failureValues":["FAILURE"],"errorPath":"data.fail_reason","result":{"imageUrlPaths":["data.data.data.*.url"],"b64JsonPaths":["data.data.data.*.b64_json"]}}}],"profiles":[{"id":"custom-example-async-profile","name":"示例异步服务商","provider":"custom-example-async","baseUrl":"","model":"gpt-image-2","apiMode":"images"}]}
 
 ## 统一任务接口示例
-{"customProviders":[{"id":"custom-example-task","name":"示例任务服务商","submit":{"path":"images/generations","method":"POST","contentType":"json","body":{"model":"$profile.model","prompt":"$prompt","n":"$params.n","size":"$params.size","resolution":"2k","quality":"$params.quality","image_urls":"$inputImages.dataUrls"},"taskIdPath":"data.0.task_id"},"poll":{"path":"tasks/{task_id}","method":"GET","query":{"language":"zh"},"intervalSeconds":5,"statusPath":"data.status","successValues":["completed"],"failureValues":["failed","cancelled"],"errorPath":"data.error.message","result":{"imageUrlPaths":["data.result.images.*.url.*"],"b64JsonPaths":[]}}}],"profiles":[{"name":"示例任务服务商","provider":"custom-example-task","baseUrl":"","model":"","apiMode":"images"}]}
+{"customProviders":[{"id":"custom-example-task","name":"示例任务服务商","submit":{"path":"images/generations","method":"POST","contentType":"json","body":{"model":"$profile.model","prompt":"$prompt","n":"$params.n","size":"$params.size","resolution":"2k","quality":"$params.quality","image_urls":"$inputImages.dataUrls"},"taskIdPath":"data.0.task_id"},"poll":{"path":"tasks/{task_id}","method":"GET","query":{"language":"zh"},"intervalSeconds":5,"statusPath":"data.status","successValues":["completed"],"failureValues":["failed","cancelled"],"errorPath":"data.error.message","result":{"imageUrlPaths":["data.result.images.*.url.*"],"b64JsonPaths":[]}}}],"profiles":[{"id":"custom-example-task-profile","name":"示例任务服务商","provider":"custom-example-task","baseUrl":"","model":"gpt-image-2","apiMode":"images"}]}
 ````

@@ -23,7 +23,6 @@ const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1'
 const RAW_DEFAULT_API_URL = readRuntimeEnv(import.meta.env.VITE_DEFAULT_API_URL)
 const DEFAULT_OPENAI_API_PROXY = readRuntimeEnv(import.meta.env.VITE_API_PROXY_AVAILABLE) === 'true'
 const DOCKER_DEPLOYMENT = readRuntimeEnv(import.meta.env.VITE_DOCKER_DEPLOYMENT) === 'true'
-const SHOW_DEFAULT_CONFIG_ONLY = readRuntimeEnv(import.meta.env.VITE_SHOW_DEFAULT_CONFIG_ONLY) === 'true'
 const DEFAULT_API_URL_PATCH = isImportableConfigUrl(RAW_DEFAULT_API_URL)
   ? null
   : parseDefaultApiUrl(RAW_DEFAULT_API_URL || (DOCKER_DEPLOYMENT && DEFAULT_OPENAI_API_PROXY ? '' : OPENAI_DEFAULT_BASE_URL))
@@ -76,8 +75,16 @@ export function normalizeAgentMaxToolRounds(value: unknown, fallback: number | u
   return Math.min(50, Math.max(1, Math.trunc(numeric)))
 }
 
-export function isDefaultConfigOnlyEnabled(): boolean {
-  return SHOW_DEFAULT_CONFIG_ONLY && (Boolean(RAW_DEFAULT_API_URL) || DEFAULT_OPENAI_API_PROXY)
+export function hasDefaultPresetConfig(): boolean {
+  return Boolean(RAW_DEFAULT_API_URL) || DEFAULT_OPENAI_API_PROXY
+}
+
+export function getDefaultApiProfileId(settings: Partial<AppSettings> | unknown): string | null {
+  const record = isRecord(settings) ? settings : {}
+  const profiles = Array.isArray(record.profiles) ? record.profiles.filter(isRecord) : []
+  const marked = profiles.find((profile) => profile.isDefault === true && typeof profile.id === 'string')
+  if (marked && typeof marked.id === 'string') return marked.id
+  return null
 }
 
 function normalizeZipDownloadRoutes(value: unknown) {
@@ -475,9 +482,10 @@ export function normalizeApiProfile(input: unknown, fallback?: Partial<ApiProfil
   return {
     ...defaults,
     id: typeof record.id === 'string' && record.id.trim() ? record.id : defaults.id,
+    isDefault: typeof record.isDefault === 'boolean' ? record.isDefault : undefined,
     name: typeof record.name === 'string' && record.name.trim() ? record.name : defaults.name,
     provider,
-    baseUrl: provider === 'fal' ? rawBaseUrl.trim().replace(/\/+$/, '') || DEFAULT_FAL_BASE_URL : rawBaseUrl,
+    baseUrl: provider === 'fal' ? rawBaseUrl.trim().replace(/\/+$/, '') : rawBaseUrl,
     apiKey: typeof record.apiKey === 'string' ? record.apiKey : defaults.apiKey,
     model: typeof record.model === 'string' && record.model.trim() ? record.model : defaults.model,
     timeout: typeof record.timeout === 'number' && Number.isFinite(record.timeout) ? record.timeout : defaults.timeout,
@@ -505,6 +513,68 @@ function validateImportedProfileRecord(input: unknown) {
   }
 }
 
+function validateDeploymentProviderIds(input: unknown) {
+  if (!Array.isArray(input)) return
+  const usedIds = new Set<string>()
+
+  for (const item of input) {
+    if (!isRecord(item)) throw new Error('部署文件中的服务商配置必须是对象')
+    const name = typeof item.name === 'string' ? item.name.trim() : ''
+    const label = name ? `「${name}」` : ''
+    const id = typeof item.id === 'string' ? item.id.trim() : ''
+    if (!id) throw new Error(`部署服务商${label}缺少 id`)
+    if (BUILT_IN_PROVIDER_IDS.has(id)) throw new Error(`部署服务商${label}的 id「${id}」与内置服务商冲突`)
+    if (usedIds.has(id)) throw new Error(`部署服务商${label}的 id「${id}」重复`)
+    if (!normalizeCustomProviderDefinition(item)) throw new Error(`部署服务商${label}的 Manifest 无效`)
+    usedIds.add(id)
+  }
+}
+
+function normalizeDeploymentProfileEntries(input: unknown, customProviderIds: Set<string>, deploymentConfig = false) {
+  const records = Array.isArray(input)
+    ? input.flatMap((item) => {
+        validateImportedProfileRecord(item)
+        if (!isRecord(item)) throw new Error('API 配置必须是对象')
+        if (typeof item.provider !== 'string' || (!BUILT_IN_PROVIDER_IDS.has(item.provider) && !customProviderIds.has(item.provider))) {
+          const name = typeof item.name === 'string' ? item.name.trim() : ''
+          const id = typeof item.id === 'string' ? item.id.trim() : ''
+          const label = name || id ? `「${name || id}」` : ''
+          throw new Error(`API 配置${label}引用了不存在的自定义服务商`)
+        }
+        return [item]
+      })
+    : []
+  const usedIds = new Set<string>()
+  if (deploymentConfig && records.length > 1) {
+    const defaultCount = records.filter((record) => record.isDefault === true).length
+    if (defaultCount !== 1) throw new Error('部署文件包含多个 API 配置时，必须且只能有一项设置 isDefault: true')
+  }
+
+  for (const record of records) {
+    const id = typeof record.id === 'string' ? record.id.trim() : ''
+    if (id) {
+      if (usedIds.has(id)) {
+        const name = typeof record.name === 'string' ? record.name.trim() : ''
+        const label = name ? `「${name}」` : ''
+        throw new Error(`API 配置${label}的 id「${id}」重复`)
+      }
+      usedIds.add(id)
+      continue
+    }
+  }
+
+  return records.map((record) => {
+    const rawId = typeof record.id === 'string' ? record.id.trim() : ''
+    if (rawId) return { source: record, profile: normalizeApiProfile({ ...record, id: rawId }, undefined, customProviderIds) }
+
+    const provider = record.provider as string
+    const id = deploymentConfig
+      ? createPresetProfileId(provider, record, usedIds)
+      : createImportedProfileId(provider, usedIds)
+    return { source: record, profile: normalizeApiProfile({ ...record, id }, undefined, customProviderIds) }
+  })
+}
+
 export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSettings {
   const record = input && typeof input === 'object' ? input as Record<string, unknown> : {}
   const customProviders = normalizeCustomProviderDefinitions(record.customProviders)
@@ -522,9 +592,18 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     streamImages: typeof record.streamImages === 'boolean' ? record.streamImages : undefined,
     streamPartialImages: normalizeStreamPartialImages(record.streamPartialImages),
   })
-  const profiles = Array.isArray(record.profiles) && record.profiles.length
+  const normalizedProfiles = Array.isArray(record.profiles) && record.profiles.length
     ? record.profiles.map((profile) => normalizeApiProfile(profile, undefined, customProviderIds))
     : [legacyProfile]
+  const defaultProfileId = getDefaultApiProfileId({ profiles: normalizedProfiles })
+  const defaultProfileIndex = normalizedProfiles.findIndex((profile) => profile.id === defaultProfileId)
+  const orderedProfiles = defaultProfileIndex > 0
+    ? [normalizedProfiles[defaultProfileIndex], ...normalizedProfiles.slice(0, defaultProfileIndex), ...normalizedProfiles.slice(defaultProfileIndex + 1)]
+    : normalizedProfiles
+  const profiles = orderedProfiles.map((profile, idx) => ({
+    ...profile,
+    isDefault: idx === 0 && profile.id === defaultProfileId ? true : undefined,
+  }))
   const activeProfileId = typeof record.activeProfileId === 'string' && profiles.some((p) => p.id === record.activeProfileId)
     ? record.activeProfileId
     : profiles[0].id
@@ -611,6 +690,7 @@ function stripMarkdownCodeFence(text: string): string {
 export function importCustomProviderSettingsFromJson(
   jsonText: string,
   existingProviders: CustomProviderDefinition[] = [],
+  options: { deploymentConfig?: boolean } = {},
 ): ImportedProviderSettings {
   let parsed: unknown
   try {
@@ -627,24 +707,19 @@ export function importCustomProviderSettingsFromJson(
 
   // 包裹结构：{customProviders: [...], profiles: [...]}
   if (Array.isArray(record.customProviders)) {
+    if (options.deploymentConfig) validateDeploymentProviderIds(record.customProviders)
     const customProviders = normalizeCustomProviderDefinitions(record.customProviders)
     if (customProviders.length === 0) {
-      throw new Error('customProviders 数组中没有有效的服务商配置')
+      if (!options.deploymentConfig) throw new Error('customProviders 数组中没有有效的服务商配置')
     }
     const customProviderIds = new Set(customProviders.map((provider) => provider.id))
-    const profiles = Array.isArray(record.profiles)
-      ? record.profiles
-        .map((item) => {
-          validateImportedProfileRecord(item)
-          return item
-        })
-        .map((item) => normalizeApiProfile(item, undefined, customProviderIds))
-        .filter((profile) => customProviderIds.has(profile.provider))
-      : []
+    const profiles = normalizeDeploymentProfileEntries(record.profiles, customProviderIds, options.deploymentConfig)
+      .map((entry) => entry.profile)
     return { customProviders, profiles }
   }
 
   // 单个 Manifest 对象：{name, submit, ...}
+  if (options.deploymentConfig) validateDeploymentProviderIds([parsed])
   const usedIds = new Set(existingProviders.map((provider) => provider.id))
   const direct = normalizeCustomProviderDefinition(parsed, usedIds)
   if (direct) return { customProviders: [direct], profiles: [] }
@@ -719,6 +794,25 @@ function createImportedProfileId(provider: ApiProvider, usedIds: Set<string>): s
   return id
 }
 
+function createPresetProfileId(provider: ApiProvider, record: Record<string, unknown>, usedIds: Set<string>): string {
+  const text = JSON.stringify(record)
+  let hash = 2166136261
+  for (let idx = 0; idx < text.length; idx += 1) {
+    hash ^= text.charCodeAt(idx)
+    hash = Math.imul(hash, 16777619)
+  }
+
+  const base = `${provider}-preset-${(hash >>> 0).toString(36)}`
+  let id = base
+  let suffix = 2
+  while (usedIds.has(id)) {
+    id = `${base}-${suffix}`
+    suffix += 1
+  }
+  usedIds.add(id)
+  return id
+}
+
 function getApiProfileDedupKey(profile: ApiProfile): string {
   return JSON.stringify([
     profile.provider,
@@ -740,27 +834,6 @@ function getApiProfileConnectionKey(profile: ApiProfile): string {
   ])
 }
 
-function hasEquivalentApiProfile(existingProfiles: ApiProfile[], importedProfile: ApiProfile): boolean {
-  const dedupKey = getApiProfileDedupKey(importedProfile)
-  if (existingProfiles.some((profile) => getApiProfileDedupKey(profile) === dedupKey)) return true
-
-  // LLM-generated imports intentionally omit API Key. Reuse an existing keyed profile
-  // when the provider, URL, model, and mode are otherwise identical.
-  if (importedProfile.apiKey.trim()) return false
-  const connectionKey = getApiProfileConnectionKey(importedProfile)
-  return existingProfiles.some((profile) => getApiProfileConnectionKey(profile) === connectionKey)
-}
-
-function dedupeApiProfiles(profiles: ApiProfile[]): ApiProfile[] {
-  const seen = new Set<string>()
-  return profiles.filter((profile) => {
-    const key = getApiProfileDedupKey(profile)
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-}
-
 function getCustomProviderDedupKey(provider: CustomProviderDefinition): string {
   return JSON.stringify([
     provider.name,
@@ -775,12 +848,12 @@ function mergeImportedCustomProviders(currentProviders: CustomProviderDefinition
   const providers = [...currentProviders]
   const providerIdMap = new Map<string, string>()
   const usedIds = new Set(providers.map((provider) => provider.id))
-  const existingKeys = new Map(providers.map((provider) => [getCustomProviderDedupKey(provider), provider.id] as const))
 
   for (const provider of importedProviders) {
-    const existingId = existingKeys.get(getCustomProviderDedupKey(provider))
-    if (existingId) {
-      providerIdMap.set(provider.id, existingId)
+    const sameIdIdx = providers.findIndex((item) => item.id === provider.id)
+    if (sameIdIdx >= 0) {
+      providers[sameIdIdx] = provider
+      providerIdMap.set(provider.id, provider.id)
       continue
     }
 
@@ -788,7 +861,6 @@ function mergeImportedCustomProviders(currentProviders: CustomProviderDefinition
     if (!normalized) continue
     providerIdMap.set(provider.id, normalized.id)
     providers.push(normalized)
-    existingKeys.set(getCustomProviderDedupKey(normalized), normalized.id)
   }
 
   return { providers, providerIdMap }
@@ -805,6 +877,8 @@ export function findEquivalentApiProfile(
     ? normalized.customProviders.find((provider) => getCustomProviderDedupKey(provider) === getCustomProviderDedupKey(importedProvider))?.id ?? importedProfile.provider
     : importedProfile.provider
   const profile = { ...importedProfile, provider }
+  const byId = normalized.profiles.find((item) => item.id === profile.id)
+  if (byId) return byId
   const dedupKey = getApiProfileDedupKey(profile)
   const exact = normalized.profiles.find((item) => getApiProfileDedupKey(item) === dedupKey)
   if (exact) return exact
@@ -814,32 +888,63 @@ export function findEquivalentApiProfile(
   return normalized.profiles.find((item) => getApiProfileConnectionKey(item) === connectionKey) ?? null
 }
 
-export function mergeImportedSettings(currentSettings: Partial<AppSettings> | unknown, importedSettings: Partial<AppSettings> | unknown): AppSettings {
+export function mergeImportedSettings(
+  currentSettings: Partial<AppSettings> | unknown,
+  importedSettings: Partial<AppSettings> | unknown,
+  options: { preserveInternalIds?: boolean } = {},
+): AppSettings {
   const current = normalizeSettings(currentSettings)
   const normalizedImported = normalizeSettings(importedSettings)
   const imported = normalizeSettings({
     ...normalizedImported,
-    profiles: dedupeApiProfiles(normalizedImported.profiles),
+    customProviders: normalizedImported.customProviders,
+    profiles: options.preserveInternalIds
+      ? normalizedImported.profiles
+      : normalizedImported.profiles.map((profile) => ({
+          ...profile,
+          isDefault: undefined,
+        })),
   })
+
+  if (options.preserveInternalIds) {
+    if (hasOnlyDefaultProfiles(current)) return imported
+
+    const customProviders = [...current.customProviders]
+    for (const provider of imported.customProviders) {
+      const idx = customProviders.findIndex((item) => item.id === provider.id)
+      if (idx >= 0) customProviders[idx] = provider
+      else customProviders.push(provider)
+    }
+    const profiles = [...current.profiles]
+    for (const profile of imported.profiles) {
+      const idx = profiles.findIndex((item) => item.id === profile.id)
+      if (idx >= 0) profiles[idx] = profile
+      else profiles.push(profile)
+    }
+    return normalizeSettings({ ...current, customProviders, profiles, activeProfileId: current.activeProfileId })
+  }
 
   if (hasOnlyDefaultProfiles(current)) {
     return imported
   }
 
-  const usedIds = new Set(current.profiles.map((profile) => profile.id))
-  const existingKeys = new Set(current.profiles.map(getApiProfileDedupKey))
   const { providers: customProviders, providerIdMap } = mergeImportedCustomProviders(current.customProviders, imported.customProviders)
-  const importedProfiles = imported.profiles
-    .map((profile) => providerIdMap.has(profile.provider)
-      ? { ...profile, provider: providerIdMap.get(profile.provider) ?? profile.provider }
-      : profile,
-    )
-    .filter((profile) => !existingKeys.has(getApiProfileDedupKey(profile)) && !hasEquivalentApiProfile(current.profiles, profile))
-    .map((profile) => ({
-      ...profile,
-      id: createImportedProfileId(profile.provider, usedIds),
-    }))
-  const profiles = [...current.profiles, ...importedProfiles]
+  const profiles = [...current.profiles]
+  const hasProfileArray = isRecord(importedSettings) && Array.isArray(importedSettings.profiles)
+  for (const importedProfile of imported.profiles) {
+    const mappedProfile = providerIdMap.has(importedProfile.provider)
+      ? { ...importedProfile, provider: providerIdMap.get(importedProfile.provider) ?? importedProfile.provider }
+      : importedProfile
+    const profile = hasProfileArray
+      ? mappedProfile
+      : { ...mappedProfile, id: createImportedProfileId(mappedProfile.provider, new Set(profiles.map((item) => item.id))) }
+    const sameIdIdx = profiles.findIndex((item) => item.id === profile.id)
+    if (sameIdIdx >= 0) {
+      profiles[sameIdIdx] = profile
+      continue
+    }
+    profiles.push(profile)
+  }
 
   return normalizeSettings({
     ...current,
@@ -847,6 +952,64 @@ export function mergeImportedSettings(currentSettings: Partial<AppSettings> | un
     profiles,
     activeProfileId: current.activeProfileId,
   })
+}
+
+export function mergePresetImportedSettings(
+  currentSettings: Partial<AppSettings> | unknown,
+  importedSettings: Partial<AppSettings> | unknown,
+  options: { lockPresetParams?: boolean; dismissedPresetProfileIds?: string[] } = {},
+): { settings: AppSettings } {
+  const importedRecord = isRecord(importedSettings) ? importedSettings : {}
+  validateDeploymentProviderIds(importedRecord.customProviders)
+  const normalizedImported = normalizeSettings(importedSettings)
+  const current = normalizeSettings(currentSettings)
+  const customProviderIds = new Set(normalizedImported.customProviders.map((provider) => provider.id))
+  const allSourceProfileEntries = normalizeDeploymentProfileEntries(importedRecord.profiles, customProviderIds, true).map((entry) => ({
+    profile: entry.profile,
+    isDefault: entry.source.isDefault === true,
+  }))
+  const dismissedIds = new Set(options.dismissedPresetProfileIds ?? [])
+  const sourceProfileEntries = allSourceProfileEntries.filter((entry) => !dismissedIds.has(entry.profile.id))
+  const sourceProfiles = sourceProfileEntries.map((entry) => entry.profile)
+  const sourceDefaultProfileId = allSourceProfileEntries.length === 1
+    ? allSourceProfileEntries[0].profile.id
+    : allSourceProfileEntries.find((entry) => entry.isDefault)?.profile.id ?? null
+  const replacingPristineDefault = sourceProfiles.length > 0 && hasOnlyDefaultProfiles(current)
+  const currentProvidersById = new Map(current.customProviders.map((provider) => [provider.id, provider]))
+  const nextProviders = normalizedImported.customProviders.map((provider) => {
+    const matched = currentProvidersById.get(provider.id)
+    return matched && !options.lockPresetParams ? matched : provider
+  })
+  const sourceProviderIds = new Set(nextProviders.map((provider) => provider.id))
+  const retainedProviders = current.customProviders
+    .filter((provider) => !sourceProviderIds.has(provider.id))
+
+  const currentProfilesById = new Map(current.profiles.map((profile) => [profile.id, profile]))
+  const nextProfiles = sourceProfileEntries.map((entry) => {
+    const matched = replacingPristineDefault ? undefined : currentProfilesById.get(entry.profile.id)
+    const importedProfile = {
+      ...entry.profile,
+      isDefault: entry.profile.id === sourceDefaultProfileId ? true : undefined,
+    }
+    if (!matched || options.lockPresetParams) return importedProfile
+    return { ...matched, baseUrl: importedProfile.baseUrl, isDefault: importedProfile.isDefault }
+  })
+  const nextProfilesById = new Map(nextProfiles.map((profile) => [profile.id, profile]))
+  const profiles = replacingPristineDefault
+    ? nextProfiles
+    : [
+        ...current.profiles.map((profile) => nextProfilesById.get(profile.id) ?? (profile.isDefault ? { ...profile, isDefault: undefined } : profile)),
+        ...nextProfiles.filter((profile) => !currentProfilesById.has(profile.id)),
+      ]
+
+  return {
+    settings: normalizeSettings({
+      ...current,
+      customProviders: [...nextProviders, ...retainedProviders],
+      profiles,
+      activeProfileId: replacingPristineDefault ? sourceDefaultProfileId ?? nextProfiles[0].id : current.activeProfileId,
+    }),
+  }
 }
 
 export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
