@@ -700,8 +700,8 @@ describe('mergePresetImportedSettings', () => {
     const merged = mergeDefaultImportedSettings(current, nextConfig, { lockPresetParams: true }).settings
 
     expect(merged.profiles.map((profile) => ({ id: profile.id, model: profile.model, timeout: profile.timeout }))).toEqual([
-      { id: 'profile-b', model: 'model-b-v2', timeout: 333 },
       { id: 'profile-a', model: 'model-a-v2', timeout: 444 },
+      { id: 'profile-b', model: 'model-b-v2', timeout: 333 },
     ])
     expect(merged.customProviders.map((provider) => ({ id: provider.id, name: provider.name }))).toEqual([
       { id: 'provider-b', name: 'Provider B2' },
@@ -942,8 +942,8 @@ describe('mergePresetImportedSettings', () => {
     }).settings
 
     expect(merged.profiles.map((profile) => ({ id: profile.id, isDefault: profile.isDefault }))).toEqual([
-      { id: 'profile-b', isDefault: true },
       { id: 'profile-a', isDefault: undefined },
+      { id: 'profile-b', isDefault: true },
     ])
   })
 
@@ -990,7 +990,7 @@ describe('default API profile marker', () => {
     expect(getDefaultApiProfileId({ profiles: [{ id: 'deployed-default-profile-0-previous-1' }] })).toBeNull()
   })
 
-  it('normalizes the current default profile to the first position', () => {
+  it('preserves profile order when marking the deployment default', () => {
     const userProfile = createDefaultFalProfile({ id: 'user-profile' })
     const builtIn = createDefaultOpenAIProfile()
     const deployed = createDefaultOpenAIProfile({ id: 'deployment-profile', isDefault: true })
@@ -1000,10 +1000,11 @@ describe('default API profile marker', () => {
       DEFAULT_OPENAI_PROFILE_ID,
     ])
     expect(normalizeSettings({ profiles: [builtIn, userProfile, deployed] }).profiles.map((profile) => profile.id)).toEqual([
-      deployed.id,
       builtIn.id,
       userProfile.id,
+      deployed.id,
     ])
+    expect(normalizeSettings({ profiles: [builtIn, userProfile, deployed] }).profiles[2].isDefault).toBe(true)
   })
 })
 

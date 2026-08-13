@@ -105,9 +105,6 @@ export function enforcePresetConfigPolicy(
       if (!profiles.some((item) => item.id === profile.id)) profiles.push({ ...profile, isDefault: profile.id === defaultPresetProfileId ? true : undefined })
     }
   }
-  const defaultIdx = profiles.findIndex((profile) => profile.id === defaultPresetProfileId)
-  if (defaultIdx > 0) profiles.unshift(...profiles.splice(defaultIdx, 1))
-
   const customProviders = settings.customProviders.filter((provider) => !dismissedProviderIds.has(provider.id)).map((provider) => {
     const preset = presetProvidersById.get(provider.id)
     return preset && paramsLocked ? preset : provider

@@ -50,7 +50,7 @@ import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdo
 import Select from './Select'
 import { Checkbox } from './Checkbox'
 import ViewportTooltip from './ViewportTooltip'
-import { ChevronDownIcon, CloseIcon, CopyIcon, PlusIcon, TrashIcon, GithubIcon, ExportIcon, ImportIcon, DragHandleIcon, FavoriteIcon, LinkIcon } from './icons'
+import { ChevronDownIcon, CloseIcon, CopyIcon, PlusIcon, TrashIcon, GithubIcon, ExportIcon, ImportIcon, DragHandleIcon, LinkIcon } from './icons'
 import { TooltipButton } from './TooltipButton'
 import GeneralSettingsTab from './settings/GeneralSettingsTab'
 import AgentSettingsTab from './settings/AgentSettingsTab'
@@ -730,7 +730,7 @@ export default function SettingsModal() {
   }
   
   const handleProfileDragStart = (e: React.DragEvent, id: string) => {
-    if (presetConfigOnly || id === defaultProfileId) return
+    if (presetConfigOnly) return
     setDraggedProfileId(id)
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData('text/plain', id)
@@ -742,7 +742,7 @@ export default function SettingsModal() {
 
     const targetElement = e.currentTarget as HTMLElement
     const rect = targetElement.getBoundingClientRect()
-    const position = targetId === defaultProfileId || e.clientY >= rect.top + rect.height / 2 ? 'after' : 'before'
+    const position = e.clientY >= rect.top + rect.height / 2 ? 'after' : 'before'
 
     if (dragOverProfileId !== targetId || dragDropPosition !== position) {
       setDragOverProfileId(targetId)
@@ -771,7 +771,7 @@ export default function SettingsModal() {
   }
 
   const moveProfileToDropTarget = (sourceId: string, targetId: string, position: 'before' | 'after' | null) => {
-    if (presetConfigOnly || !sourceId || sourceId === targetId || sourceId === defaultProfileId) return
+    if (presetConfigOnly || !sourceId || sourceId === targetId) return
 
     const sourceIndex = draft.profiles.findIndex((p) => p.id === sourceId)
     const targetIndex = draft.profiles.findIndex((p) => p.id === targetId)
@@ -783,7 +783,6 @@ export default function SettingsModal() {
     let newTargetIndex = targetIndex
     if (position === 'after') newTargetIndex++
     if (sourceIndex < targetIndex) newTargetIndex--
-    if (draft.profiles.some((profile) => profile.id === defaultProfileId)) newTargetIndex = Math.max(1, newTargetIndex)
 
     newProfiles.splice(newTargetIndex, 0, removed)
 
@@ -798,7 +797,7 @@ export default function SettingsModal() {
   }
 
   const handleProfileTouchStart = (e: React.TouchEvent, profile: ApiProfile) => {
-    if (presetConfigOnly || profile.id === defaultProfileId) return
+    if (presetConfigOnly) return
     if (!(e.target as HTMLElement).closest('[data-drag-handle]')) return
     const touch = e.touches[0]
     const rect = e.currentTarget.getBoundingClientRect()
@@ -843,7 +842,7 @@ export default function SettingsModal() {
     if (!targetId) return
 
     const rect = targetElement.getBoundingClientRect()
-    const position = targetId === defaultProfileId || touch.clientY >= rect.top + rect.height / 2 ? 'after' : 'before'
+    const position = touch.clientY >= rect.top + rect.height / 2 ? 'after' : 'before'
     setDragOverProfileId(targetId)
     setDragDropPosition(position)
 
@@ -1307,8 +1306,8 @@ export default function SettingsModal() {
                                 <div
                                   key={profile.id}
                                   data-profile-id={profile.id}
-                                  title={isDefaultProfile ? undefined : profile.name}
-                                  draggable={!presetConfigOnly && !isDefaultProfile}
+                                  title={profile.name}
+                                  draggable={!presetConfigOnly}
                                   onDragStart={(e) => handleProfileDragStart(e, profile.id)}
                                   onDragOver={(e) => handleProfileDragOver(e, profile.id)}
                                   onDrop={(e) => handleProfileDrop(e, profile.id)}
@@ -1332,17 +1331,7 @@ export default function SettingsModal() {
                                   <div className="absolute -bottom-[1px] left-0 right-0 h-[2px] bg-blue-500 rounded-full z-40 shadow-sm pointer-events-none" />
                                 )}
                                 <div className="flex min-w-0 flex-1 items-center gap-2 pr-2">
-                                  {isDefaultProfile ? (
-                                      <TooltipButton
-                                      tooltip={presetDeletionPrevented ? '默认预置配置：固定置顶且不可删除' : '默认预置配置：固定置顶'}
-                                      showOnClick
-                                      stopPropagation
-                                      className="flex items-center justify-center text-yellow-500 dark:text-yellow-400"
-                                      onClick={(e) => e.preventDefault()}
-                                    >
-                                      <FavoriteIcon filled className="h-3.5 w-3.5" />
-                                    </TooltipButton>
-                                  ) : !presetConfigOnly ? (
+                                  {!presetConfigOnly && (
                                     <div
                                       data-drag-handle
                                       className="flex cursor-grab active:cursor-grabbing items-center justify-center text-gray-400 opacity-60 transition-opacity hover:opacity-100 dark:text-gray-500"
@@ -1351,7 +1340,7 @@ export default function SettingsModal() {
                                     >
                                       <DragHandleIcon className="h-3.5 w-3.5" />
                                     </div>
-                                  ) : null}
+                                  )}
                                   <span className="min-w-0 truncate">{profile.name}</span>
                                   <span className={`rounded px-1.5 py-0.5 text-[10px] shrink-0 ${profile.id === activeProfile.id ? 'bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300' : 'bg-gray-100 text-gray-500 dark:bg-white/[0.08] dark:text-gray-400'}`}>
                                     {getApiProviderLabel(draft, profile.provider)}

@@ -188,7 +188,7 @@
 
 | 填写方式 | 说明 | 示例 |
 |------|------|------|
-| **直接填写 API 地址** | 自动创建一个 OpenAI 兼容的默认预置配置，填好 API URL、默认模型等基础参数，用户只需补充 API Key。适合只提供一个配置的部署。 | `https://api.openai.com/v1` |
+| **直接填写 API 地址** | 自动创建一个 OpenAI 兼容的默认预置配置并注入 API URL，其余参数（模型、超时等）使用应用默认值，用户只需补充 API Key。适合只提供一个配置的部署。 | `https://api.openai.com/v1` |
 | **API 地址 + 查询参数** | 在地址后追加参数，可同时预填 Key、模型等字段。 | `https://api.openai.com/v1?model=gpt-image-2&apiMode=responses` |
 | **JSON 配置文件 / 分享链接** | 通过 JSON 文件（远程 URL / 本地路径）或含 `?settings=` 参数的分享链接提供完整预置配置，支持预置多个配置（OpenAI 兼容、fal.ai 或自定义供应商）。 | 详见 [预置配置 JSON 格式](#preset-config-json) |
 
@@ -198,7 +198,7 @@
 
 | 构建时变量 (Vercel/CF/本地) | Docker 运行变量 | 功能说明 |
 |------|------|------|
-| `VITE_DEFAULT_API_URL` | `DEFAULT_API_URL` | 设定预置配置值（支持 URL 形式或 JSON 格式，详见后文） |
+| `VITE_DEFAULT_API_URL` | `DEFAULT_API_URL` | 设定预置配置值（支持 URL 形式或 JSON 格式，详见 [预置配置 JSON 格式](#preset-config-json)） |
 | `VITE_LOCK_PRESET_CONFIG_PARAMS=true` | `LOCK_PRESET_CONFIG_PARAMS=true` | 锁定预置配置中除 API Key 外的参数，并禁止编辑预置供应商定义；当前锁定配置引用的供应商不可删除，解除引用后可删除 |
 | `VITE_PREVENT_PRESET_CONFIG_DELETION=true` | `PREVENT_PRESET_CONFIG_DELETION=true` | 禁止删除预置配置和预置供应商，不锁定参数；普通项不受影响 |
 | `VITE_SHOW_PRESET_CONFIG_ONLY=true` | `SHOW_PRESET_CONFIG_ONLY=true` | 只允许使用当前预置配置，禁止创建、复制、删除、拖动、切换供应商和管理自定义供应商；未同时开启锁定时参数仍可编辑，API Key 始终可编辑 |
@@ -206,7 +206,7 @@
 > **未开启上述限制时的默认行为**：
 > - **参数更新**：API 地址重新部署后自动更新到已有用户；模型、超时等参数保留用户本地修改的值，重新部署不覆盖。
 > - **API Key**：始终由用户在本地管理，重新部署不覆盖。
-> - **排序与删除**：普通预置配置可拖动；预置配置和预置供应商均允许删除，删除状态保存在浏览器中，重新部署不会恢复。
+> - **排序与删除**：预置配置可拖动；预置配置和预置供应商均允许删除，删除状态保存在浏览器中，重新部署不会恢复。
 > - **失效预置**：部署端移除的旧预置会恢复为可编辑、可删除的普通配置。
 
 > 兼容提示：旧变量 `VITE_SHOW_DEFAULT_CONFIG_ONLY`／`SHOW_DEFAULT_CONFIG_ONLY` 仍可使用，等同于对应的 `SHOW_PRESET_CONFIG_ONLY`。
@@ -451,7 +451,7 @@ https://cooksleep.github.io/gpt_image_playground?apiUrl={address}&apiKey={key}&m
 | `apiKey` | 否 | API Key。建议省略，让用户导入后自行填写。 |
 | `model` | 是 | 默认模型 ID。 |
 | `apiMode` | 否 | `"images"` 或 `"responses"`，默认 `"images"`。 |
-| `isDefault` | 否 | 有多个配置时，为默认项设置 `true`（只能有一个）；只有一个配置时不填。 |
+| `isDefault` | 否 | 有多个配置时，为默认项设置 `true`（只能有一个）；只有一个配置时不填。默认项决定首次导入及重新部署后自动选中的配置；允许拖动排序和删除（受保护策略控制）。 |
 | `timeout` | 否 | 请求超时秒数，默认 600。 |
 | `apiProxy` | 否 | 是否走部署端 API 代理，默认 `false`。 |
 

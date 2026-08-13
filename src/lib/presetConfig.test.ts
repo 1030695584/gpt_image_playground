@@ -89,6 +89,23 @@ describe('preset config policy', () => {
     expect(enforced.profiles.map((profile) => profile.id)).toEqual(['preset-a', 'user-profile'])
   })
 
+  it('preserves the user order when the default preset is not first', async () => {
+    const { createDefaultFalProfile, createDefaultOpenAIProfile, normalizeSettings } = await import('./apiProfiles')
+    const policy = await import('./presetConfig')
+    const presetA = createDefaultOpenAIProfile({ id: 'preset-a', isDefault: true })
+    const presetB = createDefaultFalProfile({ id: 'preset-b' })
+    const user = createDefaultOpenAIProfile({ id: 'user-profile' })
+    policy.setPresetConfig({ customProviders: [], profiles: [presetA, presetB] })
+
+    const enforced = policy.enforcePresetConfigPolicy(normalizeSettings({
+      profiles: [presetB, user, presetA],
+      activeProfileId: user.id,
+    }))
+
+    expect(enforced.profiles.map((profile) => profile.id)).toEqual(['preset-b', 'user-profile', 'preset-a'])
+    expect(enforced.profiles[2].isDefault).toBe(true)
+  })
+
   it('restores removed presets when deletion is prevented', async () => {
     vi.stubEnv('VITE_PREVENT_PRESET_CONFIG_DELETION', 'true')
     const { createDefaultFalProfile, createDefaultOpenAIProfile, normalizeSettings } = await import('./apiProfiles')

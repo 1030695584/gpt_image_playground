@@ -596,13 +596,9 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     ? record.profiles.map((profile) => normalizeApiProfile(profile, undefined, customProviderIds))
     : [legacyProfile]
   const defaultProfileId = getDefaultApiProfileId({ profiles: normalizedProfiles })
-  const defaultProfileIndex = normalizedProfiles.findIndex((profile) => profile.id === defaultProfileId)
-  const orderedProfiles = defaultProfileIndex > 0
-    ? [normalizedProfiles[defaultProfileIndex], ...normalizedProfiles.slice(0, defaultProfileIndex), ...normalizedProfiles.slice(defaultProfileIndex + 1)]
-    : normalizedProfiles
-  const profiles = orderedProfiles.map((profile, idx) => ({
+  const profiles = normalizedProfiles.map((profile) => ({
     ...profile,
-    isDefault: idx === 0 && profile.id === defaultProfileId ? true : undefined,
+    isDefault: profile.id === defaultProfileId ? true : undefined,
   }))
   const activeProfileId = typeof record.activeProfileId === 'string' && profiles.some((p) => p.id === record.activeProfileId)
     ? record.activeProfileId
