@@ -43,6 +43,20 @@ describe('validateApiProfile', () => {
   })
 })
 
+describe('normalizeSettings', () => {
+  it('preserves a non-empty profile description and removes an empty one', () => {
+    const settings = normalizeSettings({
+      profiles: [
+        createDefaultOpenAIProfile({ id: 'described', description: '支持 **Markdown**' }),
+        createDefaultOpenAIProfile({ id: 'empty', description: '   ' }),
+      ],
+    })
+
+    expect(settings.profiles[0].description).toBe('支持 **Markdown**')
+    expect(settings.profiles[1].description).toBeUndefined()
+  })
+})
+
 describe('default API URL env', () => {
   it('applies shared URL params from VITE_DEFAULT_API_URL to the default profile', async () => {
     vi.resetModules()

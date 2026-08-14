@@ -23,6 +23,18 @@ describe('preset config policy', () => {
     expect(policy.getDefaultPresetProfileId()).toBe('preset-a')
   })
 
+  it('exposes an optional Markdown description for preset profiles', async () => {
+    const { createDefaultOpenAIProfile } = await import('./apiProfiles')
+    const policy = await import('./presetConfig')
+    policy.setPresetConfig({
+      customProviders: [],
+      profiles: [createDefaultOpenAIProfile({ id: 'preset-a', description: '使用 [说明](https://example.com)' })],
+    })
+
+    expect(policy.getPresetProfileDescription('preset-a')).toBe('使用 [说明](https://example.com)')
+    expect(policy.getPresetProfileDescription('missing')).toBeUndefined()
+  })
+
   it('accepts the legacy preset-only environment variable', async () => {
     vi.stubEnv('VITE_SHOW_DEFAULT_CONFIG_ONLY', 'true')
     const { createDefaultOpenAIProfile } = await import('./apiProfiles')

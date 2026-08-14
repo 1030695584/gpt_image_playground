@@ -446,6 +446,7 @@ https://cooksleep.github.io/gpt_image_playground?apiUrl={address}&apiKey={key}&m
 |------|------|------|
 | `id` | 跨部署更新时填写 | JSON／分享配置若需跨部署更新同一项，应提供稳定且具体的 ID；内置 `default-openai` 仅用于直接 API URL／查询参数方式。 |
 | `name` | 是 | 配置名称，方便用户识别。 |
+| `description` | 否 | 配置说明，支持 Markdown；填写后会以说明卡片显示在“当前配置”下方。文本可选中和复制，其中的链接可点击。 |
 | `provider` | 是 | 供应商类型。`"openai"` 为 OpenAI 兼容接口，`"fal"` 为 fal.ai，其他值引用 `customProviders` 中具有相同 ID 的供应商定义。 |
 | `baseUrl` | 是 | API Base URL。OpenAI 兼容接口填入完整地址（如 `https://api.openai.com/v1`）；fal.ai 可留空。 |
 | `apiKey` | 否 | API Key。建议省略，让用户导入后自行填写。 |
@@ -464,6 +465,7 @@ https://cooksleep.github.io/gpt_image_playground?apiUrl={address}&apiKey={key}&m
     {
       "id": "my-openai",
       "name": "我的 OpenAI 配置",
+      "description": "使用前请阅读 [接口说明](https://example.com/docs)。",
       "provider": "openai",
       "baseUrl": "https://api.openai.com/v1",
       "model": "gpt-image-2"

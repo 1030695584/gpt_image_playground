@@ -484,6 +484,7 @@ export function normalizeApiProfile(input: unknown, fallback?: Partial<ApiProfil
     id: typeof record.id === 'string' && record.id.trim() ? record.id : defaults.id,
     isDefault: typeof record.isDefault === 'boolean' ? record.isDefault : undefined,
     name: typeof record.name === 'string' && record.name.trim() ? record.name : defaults.name,
+    description: typeof record.description === 'string' && record.description.trim() ? record.description : undefined,
     provider,
     baseUrl: provider === 'fal' ? rawBaseUrl.trim().replace(/\/+$/, '') : rawBaseUrl,
     apiKey: typeof record.apiKey === 'string' ? record.apiKey : defaults.apiKey,

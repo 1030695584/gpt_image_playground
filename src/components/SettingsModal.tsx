@@ -28,6 +28,7 @@ import {
 import {
   getDefaultPresetBaseUrl,
   getDefaultPresetProfileId,
+  getPresetProfileDescription,
   getPresetProfileIds,
   isPresetConfigDeletionPrevented,
   isPresetConfigOnlyEnabled,
@@ -57,6 +58,7 @@ import AgentSettingsTab from './settings/AgentSettingsTab'
 import CustomProviderModal from './settings/CustomProviderModal'
 import ProfileImportUrlModal, { type CopyImportUrlOptions } from './settings/ProfileImportUrlModal'
 import ZipDownloadRouteModal, { ZIP_DOWNLOAD_ROUTE_OPTIONS } from './settings/ZipDownloadRouteModal'
+import MarkdownRenderer from './MarkdownRenderer'
 
 function newId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
@@ -224,6 +226,7 @@ export default function SettingsModal() {
   const profileMenuDisabled = presetConfigOnly && visibleProfiles.length <= 1
   const defaultProfileId = getDefaultPresetProfileId() ?? getDefaultApiProfileId(draft)
   const activeProfile = draft.profiles.find((profile) => profile.id === draft.activeProfileId) ?? draft.profiles[0] ?? getActiveApiProfile(draft)
+  const activePresetDescription = getPresetProfileDescription(activeProfile.id)
   const activeProfileLocked = isPresetProfileLocked(activeProfile.id)
   const activeProviderIsOpenAICompatible = isOpenAICompatibleProvider(draft, activeProfile.provider)
   const activeProviderUsesApiUrl = activeProviderIsOpenAICompatible || activeProfile.provider === 'fal'
@@ -1390,6 +1393,14 @@ export default function SettingsModal() {
                       </>
                     )}
                   </div>
+                  {activePresetDescription && (
+                    <div data-selectable-text className="mt-2.5 flex items-start gap-3 rounded-xl border border-gray-200/70 bg-gray-50/70 px-3.5 py-3 text-sm leading-6 text-gray-600 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300">
+                      <svg className="mt-0.5 h-5 w-5 shrink-0 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <MarkdownRenderer content={activePresetDescription} className="min-w-0 flex-1" />
+                    </div>
+                  )}
                 </div>
 
               {/* 1. 配置名称 */}

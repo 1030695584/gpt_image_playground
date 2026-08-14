@@ -22,6 +22,10 @@ export function getPresetProfileIds() {
   return new Set(presetProfiles.map((profile) => profile.id))
 }
 
+export function getPresetProfileDescription(id: string) {
+  return presetProfiles.find((profile) => profile.id === id)?.description
+}
+
 export function getPresetProviderIds() {
   return new Set(presetProviders.map((provider) => provider.id))
 }

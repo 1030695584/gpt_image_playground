@@ -73,6 +73,8 @@ export interface ApiProfile {
   /** 当前部署指定的默认预置配置。 */
   isDefault?: boolean
   name: string
+  /** 预置配置的 Markdown 说明。 */
+  description?: string
   provider: ApiProvider
   baseUrl: string
   apiKey: string
