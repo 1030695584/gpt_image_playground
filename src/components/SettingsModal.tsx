@@ -14,6 +14,7 @@ import {
   findEquivalentApiProfile,
   getApiProviderLabel,
   getActiveApiProfile,
+  getCustomProviderDefinition,
   importCustomProviderSettingsFromJson,
   getDefaultApiProfileId,
   isAgentTextApiProfile,
@@ -145,7 +146,7 @@ function isAsyncCustomProvider(provider: CustomProviderDefinition | null | undef
 
 function isProfileApiProxyEligible(settings: AppSettings, profile: ApiProfile) {
   if (!isOpenAICompatibleProvider(settings, profile.provider)) return false
-  const customProvider = settings.customProviders.find((provider) => provider.id === profile.provider)
+  const customProvider = getCustomProviderDefinition(settings, profile.provider)
   return !isAsyncCustomProvider(customProvider)
 }
 
@@ -230,16 +231,17 @@ export default function SettingsModal() {
   const activeProfileLocked = isPresetProfileLocked(activeProfile.id)
   const activeProviderIsOpenAICompatible = isOpenAICompatibleProvider(draft, activeProfile.provider)
   const activeProviderUsesApiUrl = activeProviderIsOpenAICompatible || activeProfile.provider === 'fal'
-  const activeCustomProvider = draft.customProviders.find((provider) => provider.id === activeProfile.provider)
+  const activeCustomProvider = getCustomProviderDefinition(draft, activeProfile.provider)
   const activeProfileApiProxyEligible = isProfileApiProxyEligible(draft, activeProfile)
   const activeCustomProviderAsync = isAsyncCustomProvider(activeCustomProvider)
   const apiProxyChecked = activeProfileApiProxyEligible && (apiProxyLocked || activeProfile.apiProxy)
   const apiProxyEnabled = apiProxyAvailable && activeProfileApiProxyEligible && apiProxyChecked
-  const defaultProviderOrder = ['openai', 'fal', ...draft.customProviders.map(p => p.id)]
+  const defaultProviderOrder = ['openai', 'sb2api-async', 'fal', ...draft.customProviders.map(p => p.id)]
   const providerOrder = draft.providerOrder || defaultProviderOrder
 
   const unorderedProviderOptions = [
     { label: 'OpenAI 兼容接口', value: 'openai', draggable: true },
+    { label: 'sub2api（异步）', value: 'sb2api-async', draggable: true },
     { label: 'fal.ai', value: 'fal', draggable: true },
     ...draft.customProviders.map((provider) => {
       const actions = [
@@ -886,7 +888,7 @@ export default function SettingsModal() {
   }
 
   const handleProviderReorder = (sourceValue: string | number, targetValue: string | number, position: 'before' | 'after' | null) => {
-    const currentOrder = draft.providerOrder || ['openai', 'fal', ...draft.customProviders.map(p => p.id)]
+    const currentOrder = draft.providerOrder || ['openai', 'sb2api-async', 'fal', ...draft.customProviders.map(p => p.id)]
     const sourceIndex = currentOrder.indexOf(String(sourceValue))
     const targetIndex = currentOrder.indexOf(String(targetValue))
     if (sourceIndex < 0 || targetIndex < 0) return
@@ -915,7 +917,7 @@ export default function SettingsModal() {
     }
 
     const provider = String(value) as ApiProfile['provider']
-    const customProvider = draft.customProviders.find((item) => item.id === provider)
+    const customProvider = getCustomProviderDefinition(draft, provider) ?? undefined
     updateActiveProfile(switchApiProfileProvider(activeProfile, provider, customProvider), true)
   }
 

@@ -34,7 +34,7 @@ export const DEFAULT_FAL_MODEL = 'openai/gpt-image-2'
 export const DEFAULT_OPENAI_PROFILE_ID = 'default-openai'
 export const DEFAULT_API_TIMEOUT = 600
 
-const BUILT_IN_PROVIDER_IDS = new Set<ApiProvider>(['openai', 'fal'])
+const BUILT_IN_PROVIDER_IDS = new Set<ApiProvider>(['openai', 'sb2api-async', 'fal'])
 const DEFAULT_CUSTOM_PROVIDER_PATHS = {
   generationPath: 'images/generations',
   editPath: 'images/edits',
@@ -59,6 +59,39 @@ const DEFAULT_EDIT_FILES: CustomProviderFileMapping[] = [
   { field: 'image[]', source: 'inputImages', array: true },
   { field: 'mask', source: 'mask' },
 ]
+const SUB2API_PROVIDER: CustomProviderDefinition = {
+  id: 'sb2api-async',
+  name: 'sub2api（异步）',
+  template: 'http-image',
+  submit: {
+    path: 'images/generations/async',
+    method: 'POST',
+    contentType: 'json',
+    body: DEFAULT_GENERATE_BODY,
+    taskIdPath: 'task_id',
+  },
+  editSubmit: {
+    path: 'images/edits/async',
+    method: 'POST',
+    contentType: 'multipart',
+    body: DEFAULT_EDIT_BODY,
+    files: DEFAULT_EDIT_FILES,
+    taskIdPath: 'task_id',
+  },
+  poll: {
+    path: 'images/tasks/{task_id}',
+    method: 'GET',
+    intervalSeconds: 3,
+    statusPath: 'status',
+    successValues: ['completed'],
+    failureValues: ['failed'],
+    errorPath: 'error.message',
+    result: {
+      imageUrlPaths: ['result.data.*.url'],
+      b64JsonPaths: ['result.data.*.b64_json'],
+    },
+  },
+}
 
 type ApiProfileProviderDraft = NonNullable<ApiProfile['providerDrafts']>[ApiProvider]
 
@@ -96,7 +129,7 @@ function normalizeZipDownloadRoutes(value: unknown) {
 function normalizeProviderOrder(value: unknown, customProviders: CustomProviderDefinition[]): string[] | undefined {
   if (!Array.isArray(value)) return undefined
 
-  const providerIds = ['openai', 'fal', ...customProviders.map((provider) => provider.id)]
+  const providerIds = ['openai', 'sb2api-async', 'fal', ...customProviders.map((provider) => provider.id)]
   const knownIds = new Set(providerIds)
   const ordered = value
     .map(String)
@@ -439,7 +472,7 @@ function normalizeProviderDraft(input: unknown, provider: ApiProvider, customPro
   const baseUrl = typeof input.baseUrl === 'string' ? input.baseUrl : undefined
   const model = typeof input.model === 'string' && input.model.trim() ? input.model : undefined
   const apiMode = input.apiMode === 'responses' ? 'responses' : input.apiMode === 'images' ? 'images' : undefined
-  const knownProvider = provider === 'fal' || provider === 'openai' || customProviderIds.has(provider)
+  const knownProvider = BUILT_IN_PROVIDER_IDS.has(provider) || customProviderIds.has(provider)
   if (!knownProvider) return undefined
 
   return {
@@ -469,7 +502,7 @@ function normalizeProviderDrafts(input: unknown, customProviderIds: Set<string>)
 export function normalizeApiProfile(input: unknown, fallback?: Partial<ApiProfile>, customProviderIds = new Set<string>()): ApiProfile {
   const record = input && typeof input === 'object' ? input as Record<string, unknown> : {}
   const rawProvider = typeof record.provider === 'string' ? record.provider : ''
-  const provider: ApiProvider = rawProvider === 'fal' || customProviderIds.has(rawProvider) ? rawProvider : 'openai'
+  const provider: ApiProvider = BUILT_IN_PROVIDER_IDS.has(rawProvider) || customProviderIds.has(rawProvider) ? rawProvider : 'openai'
   const apiMode: ApiMode = provider === 'openai' && record.apiMode === 'responses' ? 'responses' : 'images'
   const defaults = provider === 'fal'
     ? createDefaultFalProfile(fallback)
@@ -493,7 +526,7 @@ export function normalizeApiProfile(input: unknown, fallback?: Partial<ApiProfil
     apiMode,
     reasoningEffort: normalizeReasoningEffort(record.reasoningEffort, defaults.reasoningEffort),
     codexCli: Boolean(record.codexCli),
-    apiProxy: typeof record.apiProxy === 'boolean' ? record.apiProxy : defaults.apiProxy,
+    apiProxy: provider === 'sb2api-async' ? false : typeof record.apiProxy === 'boolean' ? record.apiProxy : defaults.apiProxy,
     responseFormatB64Json: record.responseFormatB64Json === true ? true : undefined,
     streamImages,
     streamPartialImages: normalizeStreamPartialImages(record.streamPartialImages, defaults.streamPartialImages),
@@ -659,6 +692,7 @@ export function getAgentImageApiProfile(settings: Partial<AppSettings> | unknown
 }
 
 export function getCustomProviderDefinition(settings: Partial<AppSettings> | unknown, provider: ApiProvider): CustomProviderDefinition | null {
+  if (provider === 'sb2api-async') return SUB2API_PROVIDER
   const normalized = normalizeSettings(settings)
   return normalized.customProviders.find((item) => item.id === provider) ?? null
 }
@@ -666,6 +700,7 @@ export function getCustomProviderDefinition(settings: Partial<AppSettings> | unk
 export function getApiProviderLabel(settings: Partial<AppSettings> | unknown, provider: ApiProvider): string {
   if (provider === 'fal') return 'fal.ai'
   if (provider === 'openai') return 'OpenAI'
+  if (provider === 'sb2api-async') return SUB2API_PROVIDER.name
   return getCustomProviderDefinition(settings, provider)?.name ?? provider
 }
 

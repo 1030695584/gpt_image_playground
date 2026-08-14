@@ -7,7 +7,9 @@ import {
   DEFAULT_SETTINGS,
   createDefaultOpenAIProfile,
   createDefaultFalProfile,
+  getApiProviderLabel,
   getActiveApiProfile,
+  getCustomProviderDefinition,
   findEquivalentApiProfile,
   importCustomProviderDefinitionFromJson,
   importCustomProviderSettingsFromJson,
@@ -1023,6 +1025,47 @@ describe('default API profile marker', () => {
 })
 
 describe('custom providers', () => {
+  it('provides the built-in sub2api async manifest', () => {
+    const settings = normalizeSettings({
+      profiles: [{
+        ...createDefaultOpenAIProfile(),
+        provider: 'sb2api-async',
+        baseUrl: 'https://sub2api.example.com/v1',
+        apiProxy: true,
+      }],
+    })
+    const provider = getCustomProviderDefinition(settings, 'sb2api-async')
+
+    expect(settings.profiles[0]).toMatchObject({
+      provider: 'sb2api-async',
+      apiMode: 'images',
+      apiProxy: false,
+      streamImages: false,
+    })
+    expect(provider).toMatchObject({
+      id: 'sb2api-async',
+      name: 'sub2api（异步）',
+      submit: {
+        path: 'images/generations/async',
+        taskIdPath: 'task_id',
+      },
+      editSubmit: {
+        path: 'images/edits/async',
+        taskIdPath: 'task_id',
+      },
+      poll: {
+        path: 'images/tasks/{task_id}',
+        intervalSeconds: 3,
+        statusPath: 'status',
+        successValues: ['completed'],
+        failureValues: ['failed'],
+        errorPath: 'error.message',
+        result: { imageUrlPaths: ['result.data.*.url'] },
+      },
+    })
+    expect(getApiProviderLabel(settings, 'sb2api-async')).toBe('sub2api（异步）')
+  })
+
   it('normalizes custom provider definitions and keeps custom profiles', () => {
     const settings = normalizeSettings({
       customProviders: [{
@@ -1267,7 +1310,7 @@ describe('custom providers', () => {
       ],
     })
 
-    expect(settings.providerOrder).toEqual(['fal', 'openai', 'custom-alpha', 'custom-beta'])
+    expect(settings.providerOrder).toEqual(['fal', 'openai', 'sb2api-async', 'custom-alpha', 'custom-beta'])
   })
 
   it('keeps active custom providers in Images API mode when legacy apiMode is responses', () => {
