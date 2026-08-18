@@ -310,6 +310,31 @@ describe('URL settings params', () => {
     })
   })
 
+  it('applies the codex CLI query parameter to a requested custom profile', () => {
+    const current = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      customProviders: [{
+        id: 'custom-provider',
+        name: 'Custom Provider',
+        submit: { path: 'images/generations' },
+      }],
+      profiles: [{
+        ...createDefaultOpenAIProfile({ id: 'custom-profile' }),
+        provider: 'custom-provider',
+        codexCli: false,
+      }],
+      activeProfileId: 'custom-profile',
+    })
+    const next = normalizeSettings({
+      ...current,
+      ...buildSettingsFromUrlParams(current, new URLSearchParams('profileId=custom-profile&codexCli=true')),
+    })
+
+    expect(next.profiles).toHaveLength(1)
+    expect(next.activeProfileId).toBe('custom-profile')
+    expect(next.profiles[0]).toMatchObject({ provider: 'custom-provider', codexCli: true })
+  })
+
   it('clears known URL setting params without touching unrelated params', () => {
     const params = new URLSearchParams('reasoningEffort=high&foo=bar')
 
@@ -657,6 +682,7 @@ describe('URL settings params', () => {
         apiProxy: false,
       }],
     }))
+    params.set('codexCli', 'true')
 
     const next = normalizeSettings({
       ...current,
@@ -676,6 +702,7 @@ describe('URL settings params', () => {
       model: 'patched-custom-model',
       timeout: 240,
       apiMode: 'images',
+      codexCli: true,
     })
   })
 

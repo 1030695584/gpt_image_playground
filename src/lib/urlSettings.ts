@@ -172,10 +172,10 @@ function buildPresetConfigOnlySettingsFromUrlParams(currentSettings: Partial<App
           if (typeof matched.timeout === 'number' && Number.isFinite(matched.timeout)) patch.timeout = matched.timeout
           if (typeof matched.apiProxy === 'boolean') patch.apiProxy = matched.apiProxy
           if (matched.responseFormatB64Json === true) patch.responseFormatB64Json = true
+          if (targetProfile.provider !== 'fal' && typeof matched.codexCli === 'boolean') patch.codexCli = matched.codexCli
           if (isOpenAI) {
             if (matched.apiMode === 'images' || matched.apiMode === 'responses') patch.apiMode = matched.apiMode
             if (matched.reasoningEffort !== undefined) patch.reasoningEffort = normalizeReasoningEffort(matched.reasoningEffort)
-            if (typeof matched.codexCli === 'boolean') patch.codexCli = matched.codexCli
             if (typeof matched.streamImages === 'boolean') patch.streamImages = matched.streamImages
             if (matched.streamPartialImages !== undefined) patch.streamPartialImages = normalizeStreamPartialImages(matched.streamPartialImages)
           }
@@ -195,15 +195,17 @@ function buildPresetConfigOnlySettingsFromUrlParams(currentSettings: Partial<App
     if (apiUrlParam !== null) patch.baseUrl = normalizeBaseUrl(apiUrlParam.trim())
     if (modelParam !== null && modelParam.trim()) patch.model = modelParam.trim()
   }
+  if (targetProfile.provider !== 'fal' && !apiKeyOnly) {
+    const codexCliParam = searchParams.get('codexCli')
+    if (codexCliParam !== null) patch.codexCli = codexCliParam.trim().toLowerCase() === 'true'
+  }
   if (isOpenAI && !apiKeyOnly) {
     const apiModeParam = searchParams.get('apiMode')
     const reasoningEffortParam = searchParams.get('reasoningEffort')
-    const codexCliParam = searchParams.get('codexCli')
     const streamImagesParam = searchParams.get('streamImages')
     const streamPartialImagesParam = searchParams.get('streamPartialImages')
     if (apiModeParam === 'images' || apiModeParam === 'responses') patch.apiMode = apiModeParam
     if (reasoningEffortParam !== null) patch.reasoningEffort = normalizeReasoningEffort(reasoningEffortParam)
-    if (codexCliParam !== null) patch.codexCli = codexCliParam.trim().toLowerCase() === 'true'
     if (streamImagesParam !== null) patch.streamImages = streamImagesParam.trim().toLowerCase() === 'true'
     if (streamPartialImagesParam !== null) patch.streamPartialImages = normalizeStreamPartialImages(streamPartialImagesParam)
   }
@@ -247,8 +249,21 @@ function buildRegularSettingsFromUrlParams(currentSettings: Partial<AppSettings>
     ? normalizeSettings(currentSettings)
     : activateFirstImportedProfile(mergeImportedSettings(currentSettings, importedSettings), importedSettings)
 
+  const requestedProfileId = profileIdParam?.trim() ?? ''
+  const requestedCustomProfile = requestedProfileId
+    ? settings.profiles.find((item) => item.id === requestedProfileId && item.provider !== 'openai' && item.provider !== 'fal')
+    : undefined
+  if (requestedCustomProfile && codexCliParam !== null) {
+    return normalizeSettings({
+      ...settings,
+      profiles: settings.profiles.map((item) => item.id === requestedProfileId
+        ? { ...item, codexCli: codexCliParam.trim().toLowerCase() === 'true' }
+        : item),
+      activeProfileId: requestedProfileId,
+    })
+  }
+
   if (hasLegacyOpenAIParams) {
-    const requestedProfileId = profileIdParam?.trim() ?? ''
     const existingById = requestedProfileId
       ? settings.profiles.find((item) => item.id === requestedProfileId && item.provider === 'openai')
       : undefined

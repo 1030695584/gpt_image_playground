@@ -340,6 +340,48 @@ describe('mask draft lifecycle in store actions', () => {
     expect(state.showToast).toHaveBeenCalledWith('任务已提交', 'success')
   })
 
+  it('does not apply the outer watchdog to concurrent Codex CLI custom requests', async () => {
+    const request = deferred<Awaited<ReturnType<typeof callImageApi>>>()
+    vi.mocked(callImageApi).mockImplementationOnce(() => request.promise)
+    const profile = {
+      ...createDefaultOpenAIProfile({ id: 'custom-sync-profile', apiKey: 'custom-key', timeout: 1, codexCli: true }),
+      provider: 'custom-sync',
+    }
+    useStore.setState({
+      settings: normalizeSettings({
+        ...DEFAULT_SETTINGS,
+        customProviders: [{
+          id: 'custom-sync',
+          name: 'Custom Sync',
+          submit: { path: 'images/generations' },
+        }],
+        profiles: [profile],
+        activeProfileId: profile.id,
+      }),
+      params: { ...DEFAULT_PARAMS, n: 2 },
+    })
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+
+    await submitTask()
+    await vi.waitFor(() => expect(callImageApi).toHaveBeenCalledOnce())
+
+    expect(setTimeoutSpy.mock.calls.some(([, delay]) => delay === 1000)).toBe(false)
+    request.resolve({
+      images: ['data:image/png;base64,success'],
+      actualParams: { n: 1 },
+      actualParamsList: [{ n: 1 }],
+      revisedPrompts: [],
+      failedRequests: [{ requestIndex: 1, error: 'The operation was aborted' }],
+    })
+    await vi.waitFor(() => expect(useStore.getState().tasks[0]?.status).toBe('done'))
+
+    expect(useStore.getState().tasks[0]).toMatchObject({
+      outputErrors: [{ requestIndex: 1, error: 'The operation was aborted' }],
+    })
+    expect(useStore.getState().tasks[0].outputImages).toHaveLength(1)
+    setTimeoutSpy.mockRestore()
+  })
+
   it('stores decoded image size as actual size when the API omits size', async () => {
     const { callImageApi } = await import('./lib/api')
     vi.mocked(callImageApi).mockClear()

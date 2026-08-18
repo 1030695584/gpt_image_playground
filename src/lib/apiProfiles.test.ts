@@ -1237,6 +1237,27 @@ describe('custom providers', () => {
     expect(profile.model).toBe(DEFAULT_IMAGES_MODEL)
   })
 
+  it('rejects task mappings without poll configuration', () => {
+    expect(() => importCustomProviderDefinitionFromJson(JSON.stringify({
+      name: 'Invalid Async',
+      submit: {
+        path: 'images/generations',
+        taskIdPath: 'task_id',
+      },
+    }))).toThrow('配置了 taskIdPath，但缺少 poll')
+  })
+
+  it('restores a custom provider Codex CLI draft', () => {
+    const provider = importCustomProviderDefinitionFromJson(JSON.stringify({
+      name: 'Custom Provider',
+      submit: { path: 'images/generations' },
+    }))
+    const customProfile = switchApiProfileProvider(createDefaultOpenAIProfile(), provider.id, provider)
+    const openAIProfile = switchApiProfileProvider({ ...customProfile, codexCli: true }, 'openai')
+
+    expect(switchApiProfileProvider(openAIProfile, provider.id, provider).codexCli).toBe(true)
+  })
+
   it('uses API-mode specific streaming defaults and preserves partial image count', () => {
     expect(createDefaultOpenAIProfile().streamImages).toBe(false)
     expect(createDefaultOpenAIProfile({ apiMode: 'responses' }).streamImages).toBe(true)

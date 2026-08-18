@@ -433,7 +433,7 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
       model: savedDraft?.model ?? (shouldUseOpenAIDefaults ? DEFAULT_IMAGES_MODEL : profile.model || DEFAULT_IMAGES_MODEL),
       apiMode: 'images',
       reasoningEffort: savedDraft?.reasoningEffort,
-      codexCli: false,
+      codexCli: savedDraft?.codexCli ?? false,
       apiProxy: false,
       responseFormatB64Json: savedDraft?.responseFormatB64Json,
       streamImages: false,
@@ -713,6 +713,13 @@ export interface ImportedProviderSettings {
   profiles: ApiProfile[]
 }
 
+function validateCustomProviderTaskMappings(providers: CustomProviderDefinition[]) {
+  const invalid = providers.find((provider) =>
+    (provider.submit.taskIdPath || provider.editSubmit?.taskIdPath) && !provider.poll,
+  )
+  if (invalid) throw new Error(`自定义服务商「${invalid.name}」配置了 taskIdPath，但缺少 poll`)
+}
+
 function stripMarkdownCodeFence(text: string): string {
   const trimmed = text.trim()
   const match = trimmed.match(/^```[^\r\n]*\r?\n([\s\S]*?)\r?\n```$/)
@@ -744,6 +751,7 @@ export function importCustomProviderSettingsFromJson(
     if (customProviders.length === 0) {
       if (!options.deploymentConfig) throw new Error('customProviders 数组中没有有效的服务商配置')
     }
+    validateCustomProviderTaskMappings(customProviders)
     const customProviderIds = new Set(customProviders.map((provider) => provider.id))
     const profiles = normalizeDeploymentProfileEntries(record.profiles, customProviderIds, options.deploymentConfig)
       .map((entry) => entry.profile)
@@ -754,7 +762,10 @@ export function importCustomProviderSettingsFromJson(
   if (options.deploymentConfig) validateDeploymentProviderIds([parsed])
   const usedIds = new Set(existingProviders.map((provider) => provider.id))
   const direct = normalizeCustomProviderDefinition(parsed, usedIds)
-  if (direct) return { customProviders: [direct], profiles: [] }
+  if (direct) {
+    validateCustomProviderTaskMappings([direct])
+    return { customProviders: [direct], profiles: [] }
+  }
 
   throw new Error('无法识别该 JSON。请粘贴自定义服务商配置。')
 }

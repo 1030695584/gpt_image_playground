@@ -1113,11 +1113,14 @@ function scheduleOpenAIWatchdog(taskId: string, timeoutSeconds: number, profile?
   openAIWatchdogTimers.set(taskId, timer)
 }
 
-function usesConcurrentOpenAIImageRequests(profile: ApiProfile, params: TaskParams) {
+function usesConcurrentImageRequests(settings: AppSettings, profile: ApiProfile, params: TaskParams, hasInputImages: boolean) {
   const n = params.n > 0 ? params.n : 1
-  if (profile.provider !== 'openai' || n <= 1) return false
-  if (profile.apiMode === 'responses') return true
-  return profile.apiMode === 'images' && (profile.codexCli || profile.streamImages)
+  if (n <= 1) return false
+  if (profile.provider === 'openai') {
+    if (profile.apiMode === 'responses') return true
+    return profile.apiMode === 'images' && (profile.codexCli || profile.streamImages)
+  }
+  return profile.provider !== 'fal' && profile.codexCli && !isAsyncCustomProviderTask(settings, profile.provider, hasInputImages)
 }
 
 export function taskHasOutputErrors(task: Pick<TaskRecord, 'outputErrors'>) {
@@ -3524,7 +3527,7 @@ async function executeTask(taskId: string) {
   if (
     taskProvider !== 'fal' &&
     !isAsyncCustomProviderTask(requestSettings, taskProvider, task.inputImageIds.length > 0) &&
-    !usesConcurrentOpenAIImageRequests(activeProfile, task.params)
+    !usesConcurrentImageRequests(requestSettings, activeProfile, task.params, task.inputImageIds.length > 0)
   ) {
     scheduleOpenAIWatchdog(taskId, activeProfile.timeout, activeProfile)
   }
