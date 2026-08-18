@@ -15,3 +15,4 @@
 
 ### 修复
 - **流式 Images API 图片 URL 兼容**：OpenAI 兼容接口在 `image_generation.completed` 或 `image_edit.completed` 事件中返回图片 URL 时，现在会正确下载并识别最终图片；同时兼容流中的心跳注释和命名事件，并保留原始 URL 供下载失败时恢复。
+- **Agent API 配置候选项筛选**：Agent 独立配置下拉框不再显示缺少 API Key 或有效 API URL 的配置；使用可用 API 代理或 fal.ai 默认地址的配置仍可正常选择，暂时不可用的原选择会在配置恢复后保留。
