@@ -268,6 +268,49 @@ describe('callImageApi', () => {
     })
   })
 
+  it('resolves a streamed completed image returned as a URL after ping events', async () => {
+    const imageUrl = 'https://example.com/generated.png'
+    const streamBody = [
+      ': PING',
+      '',
+      'event: image_generation.completed',
+      `data: {"type":"image_generation.completed","url":"${imageUrl}"}`,
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n')
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(streamBody, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }))
+      .mockResolvedValueOnce(new Response(new Blob(['image'], { type: 'image/png' }), {
+        status: 200,
+        headers: { 'Content-Type': 'image/png' },
+      }))
+
+    const result = await callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        apiKey: 'test-key',
+        streamImages: true,
+        profiles: DEFAULT_SETTINGS.profiles.map((profile) => ({
+          ...profile,
+          apiKey: 'test-key',
+          streamImages: true,
+        })),
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+    } as any)
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[1][0]).toBe(imageUrl)
+    expect(result.images).toEqual(['data:image/png;base64,aW1hZ2U='])
+    expect(result.rawImageUrls).toEqual([imageUrl])
+  })
+
   it('suggests disabling streaming when a streaming request fails', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('invalid character \':\' looking for beginning of value', {
       status: 400,
