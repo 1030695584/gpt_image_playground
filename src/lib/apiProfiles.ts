@@ -848,7 +848,7 @@ function createPresetProfileId(provider: ApiProvider, record: Record<string, unk
 function getApiProfileDedupKey(profile: ApiProfile): string {
   return JSON.stringify([
     profile.provider,
-    profile.baseUrl.trim().replace(/\/+$/, '').toLowerCase(),
+    profile.baseUrl.trim().toLowerCase(),
     profile.apiKey.trim(),
     profile.model.trim(),
     profile.apiMode,
@@ -859,7 +859,7 @@ function getApiProfileDedupKey(profile: ApiProfile): string {
 function getApiProfileConnectionKey(profile: ApiProfile): string {
   return JSON.stringify([
     profile.provider,
-    profile.baseUrl.trim().replace(/\/+$/, '').toLowerCase(),
+    profile.baseUrl.trim().toLowerCase(),
     profile.model.trim(),
     profile.apiMode,
     profile.reasoningEffort,

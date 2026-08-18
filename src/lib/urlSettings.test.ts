@@ -180,7 +180,7 @@ describe('URL settings params', () => {
     })
   })
 
-  it('does not create a duplicate profile for matching legacy URL params', () => {
+  it('creates a separate profile when the API URL trailing slash differs', () => {
     const existingProfile = createDefaultOpenAIProfile({
       id: 'existing-openai',
       name: 'Existing OpenAI',
@@ -197,8 +197,9 @@ describe('URL settings params', () => {
       ...buildSettingsFromUrlParams(current, new URLSearchParams('apiUrl=https://api.example.com/v1/&apiKey=test-key')),
     })
 
-    expect(next.profiles).toHaveLength(2)
-    expect(next.activeProfileId).toBe(existingProfile.id)
+    expect(next.profiles).toHaveLength(3)
+    expect(next.activeProfileId).not.toBe(existingProfile.id)
+    expect(next.profiles.find((profile) => profile.id === next.activeProfileId)?.baseUrl).toBe('https://api.example.com/v1/')
   })
 
   it('creates a separate profile when URL profile name differs', () => {
@@ -224,7 +225,7 @@ describe('URL settings params', () => {
     expect(activeProfile).toMatchObject({
       name: 'URL Profile',
       provider: 'openai',
-      baseUrl: 'https://api.example.com/v1',
+      baseUrl: 'https://api.example.com/v1/',
       apiKey: 'test-key',
     })
   })
@@ -252,7 +253,7 @@ describe('URL settings params', () => {
     expect(next.activeProfileId).not.toBe(existingProfile.id)
     expect(activeProfile).toMatchObject({
       provider: 'openai',
-      baseUrl: 'https://api.example.com/v1',
+      baseUrl: 'https://api.example.com/v1/',
       apiKey: 'test-key',
       codexCli: true,
     })
@@ -282,7 +283,7 @@ describe('URL settings params', () => {
     expect(next.activeProfileId).not.toBe(existingProfile.id)
     expect(activeProfile).toMatchObject({
       provider: 'openai',
-      baseUrl: 'https://api.example.com/v1',
+      baseUrl: 'https://api.example.com/v1/',
       apiKey: 'test-key',
       streamImages: true,
       streamPartialImages: 3,
@@ -726,6 +727,41 @@ describe('URL settings params', () => {
       model: 'patched-model-b',
       timeout: 240,
     })
+  })
+
+  it('preserves a trailing slash when overriding a custom preset API URL', async () => {
+    vi.resetModules()
+    vi.stubEnv('VITE_SHOW_PRESET_CONFIG_ONLY', 'true')
+    const apiProfiles = await import('./apiProfiles')
+    const presetConfig = await import('./presetConfig')
+    const provider = {
+      id: 'custom-preset',
+      name: 'Custom Preset',
+      submit: { path: 'custom/image-tasks' },
+    }
+    const profile = apiProfiles.createDefaultOpenAIProfile({
+      id: 'custom-preset-profile',
+      provider: provider.id,
+      baseUrl: 'https://old.example.com/',
+      apiMode: 'images',
+    })
+    presetConfig.setPresetConfig({ customProviders: [provider], profiles: [profile] })
+    const { buildSettingsFromUrlParams } = await import('./urlSettings')
+    const current = apiProfiles.normalizeSettings({
+      ...apiProfiles.DEFAULT_SETTINGS,
+      customProviders: [provider],
+      profiles: [profile],
+      activeProfileId: profile.id,
+    })
+
+    const next = apiProfiles.normalizeSettings({
+      ...current,
+      ...buildSettingsFromUrlParams(current, new URLSearchParams(
+        'profileId=custom-preset-profile&apiUrl=https://new.example.com/',
+      )),
+    })
+
+    expect(next.profiles[0].baseUrl).toBe('https://new.example.com/')
   })
 
   it('ignores a same-ID settings profile with a conflicting provider in preset-only mode', async () => {
