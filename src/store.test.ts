@@ -661,6 +661,55 @@ describe('input persistence setting', () => {
 describe('preset deletion state', () => {
   afterEach(() => {
     setPresetConfig(null)
+    useStore.setState({ previousPresetConfig: null })
+  })
+
+  it('removes an untouched preset after deployment removes it', async () => {
+    const providers = [
+      { id: 'preset-provider-a', name: 'Provider A', submit: { path: 'a' } },
+      { id: 'preset-provider-b', name: 'Provider B', submit: { path: 'b' } },
+    ]
+    const profiles = [
+      createDefaultOpenAIProfile({ id: 'preset-profile-a', provider: providers[0].id, isDefault: true }),
+      createDefaultOpenAIProfile({ id: 'preset-profile-b', provider: providers[1].id }),
+    ]
+    const previous = { customProviders: providers, profiles }
+    const next = { customProviders: [providers[0]], profiles: [profiles[0]] }
+    useStore.setState({
+      settings: normalizeSettings(DEFAULT_SETTINGS),
+      previousPresetConfig: null,
+      tasks: [],
+    })
+    setPresetConfig(previous)
+    await useStore.getState().setPresetImportedSettings(previous)
+
+    setPresetConfig(next)
+    await useStore.getState().setPresetImportedSettings(next)
+
+    const state = useStore.getState()
+    expect(state.settings.profiles.map((profile) => profile.id)).toEqual(['preset-profile-a'])
+    expect(state.settings.customProviders.map((provider) => provider.id)).toEqual(['preset-provider-a'])
+  })
+
+  it('removes untouched presets when deployment removes the entire preset config', async () => {
+    const provider = { id: 'preset-provider', name: 'Preset Provider', submit: { path: 'generate' } }
+    const profile = createDefaultOpenAIProfile({ id: 'preset-profile', provider: provider.id, isDefault: true })
+    const preset = { customProviders: [provider], profiles: [profile] }
+    useStore.setState({
+      settings: normalizeSettings(DEFAULT_SETTINGS),
+      previousPresetConfig: null,
+      tasks: [],
+    })
+    setPresetConfig(preset)
+    await useStore.getState().setPresetImportedSettings(preset)
+
+    setPresetConfig(null)
+    await useStore.getState().setPresetImportedSettings({ customProviders: [], profiles: [] })
+
+    const state = useStore.getState()
+    expect(state.settings.profiles.map((item) => item.id)).toEqual([DEFAULT_SETTINGS.profiles[0].id])
+    expect(state.settings.customProviders).toEqual([])
+    expect(state.previousPresetConfig).toBeNull()
   })
 
   it('clearData clears both dismissal lists and reapplies the current preset', async () => {

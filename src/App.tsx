@@ -78,13 +78,18 @@ export default function App() {
         const state = useStore.getState()
         if (importedSettings) {
           await state.setPresetImportedSettings(importedSettings)
-        } else if (state.settings.profiles.some((profile) => profile.isDefault)) {
+        } else if (state.previousPresetConfig) {
+          await state.setPresetImportedSettings({ customProviders: [], profiles: [] })
+        }
+
+        const syncedState = useStore.getState()
+        if (!importedSettings) {
           useStore.setState({ dismissedPresetProfileIds: [], dismissedPresetProviderIds: [] })
-          state.setSettings({
-            profiles: state.settings.profiles.map((profile) => profile.isDefault ? { ...profile, isDefault: undefined } : profile),
-          })
-        } else {
-          useStore.setState({ dismissedPresetProfileIds: [], dismissedPresetProviderIds: [] })
+          if (syncedState.settings.profiles.some((profile) => profile.isDefault)) {
+            syncedState.setSettings({
+              profiles: syncedState.settings.profiles.map((profile) => profile.isDefault ? { ...profile, isDefault: undefined } : profile),
+            })
+          }
         }
 
         const current = useStore.getState()

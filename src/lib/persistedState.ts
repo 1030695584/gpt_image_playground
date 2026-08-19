@@ -7,6 +7,7 @@ import { getPersistableAgentConversations, stripPersistedAgentConversations } fr
 
 export interface PersistedAppState {
   settings: AppSettings
+  previousPresetConfig?: Pick<AppSettings, 'customProviders' | 'profiles'> | null
   dismissedPresetProfileIds?: string[]
   dismissedPresetProviderIds?: string[]
   params: TaskParams
@@ -44,6 +45,7 @@ type PersistedStateFallback = Pick<
 }
 
 export type NormalizedPersistedAppState = PersistedAppState & {
+  previousPresetConfig: Pick<AppSettings, 'customProviders' | 'profiles'> | null
   dismissedPresetProfileIds: string[]
   dismissedPresetProviderIds: string[]
   prompt: string
@@ -90,6 +92,7 @@ export function createPersistedState(state: PersistedStateSource, includeLegacyA
   const galleryInputDraft = saveGalleryInputDraft(state)
   return {
     settings,
+    previousPresetConfig: state.previousPresetConfig ?? null,
     dismissedPresetProfileIds: state.dismissedPresetProfileIds ?? [],
     dismissedPresetProviderIds: state.dismissedPresetProviderIds ?? [],
     params: state.params,
@@ -136,6 +139,15 @@ export function normalizePersistedState(
   if (!isRecord(persistedState)) return null
 
   const settings = normalizeSettings(persistedState.settings ?? fallback.settings)
+  const previousPresetConfig = isRecord(persistedState.previousPresetConfig) && Array.isArray(persistedState.previousPresetConfig.profiles)
+    ? (() => {
+        const normalized = normalizeSettings(persistedState.previousPresetConfig)
+        return {
+          customProviders: normalized.customProviders,
+          profiles: persistedState.previousPresetConfig.profiles.length ? normalized.profiles : [],
+        }
+      })()
+    : null
   const hasLegacyAgentConversations = Array.isArray(persistedState.agentConversations)
   const agentConversations = hasLegacyAgentConversations
     ? normalizeAgentConversations(persistedState.agentConversations)
@@ -184,6 +196,7 @@ export function normalizePersistedState(
   return {
     state: {
       settings,
+      previousPresetConfig,
       dismissedPresetProfileIds: normalizeStringArray(persistedState.dismissedPresetProfileIds, fallback.dismissedPresetProfileIds ?? []),
       dismissedPresetProviderIds: normalizeStringArray(persistedState.dismissedPresetProviderIds, fallback.dismissedPresetProviderIds ?? []),
       params: normalizeParams(persistedState.params, fallback.params),

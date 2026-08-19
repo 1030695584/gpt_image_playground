@@ -275,6 +275,7 @@ interface AppState {
 
   // 设置
   settings: AppSettings
+  previousPresetConfig: Pick<AppSettings, 'customProviders' | 'profiles'> | null
   setSettings: (s: Partial<AppSettings>) => void
   setPresetImportedSettings: (
     importedSettings: Partial<AppSettings> | unknown,
@@ -568,6 +569,7 @@ export const useStore = create<AppState>()(
 
       // Settings
       settings: { ...DEFAULT_SETTINGS },
+      previousPresetConfig: null,
       dismissedPresetProfileIds: [],
       dismissPresetProfile: (id) => set((state) => ({
         dismissedPresetProfileIds: state.dismissedPresetProfileIds.includes(id)
@@ -648,6 +650,8 @@ export const useStore = create<AppState>()(
             lockPresetParams: isPresetConfigParamsLocked(),
             dismissedPresetProfileIds: deletionPrevented ? [] : dismissedPresetProfileIds,
             dismissedPresetProviderIds: effectiveDismissedPresetProviderIds,
+            previousPresetConfig: state.previousPresetConfig,
+            usedPresetProfileIds: state.tasks.flatMap((task) => task.apiProfileId ? [task.apiProfileId] : []),
           })
           const settings = normalizeSettings(enforcePresetConfigPolicy(
             normalizeSettings(transform?.(merged.settings) ?? merged.settings),
@@ -656,6 +660,7 @@ export const useStore = create<AppState>()(
           const shouldClearReusedProfile = state.reusedTaskApiProfileId && settings.activeProfileId === state.reusedTaskApiProfileId
           return {
             settings,
+            previousPresetConfig: getPresetConfig() ? merged.presetConfig : null,
             dismissedPresetProfileIds,
             dismissedPresetProviderIds,
             reusedTaskApiProfileId: shouldClearReusedProfile ? null : state.reusedTaskApiProfileId,

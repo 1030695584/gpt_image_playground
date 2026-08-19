@@ -864,6 +864,100 @@ describe('mergePresetImportedSettings', () => {
     expect(restored.customProviders[1]).toMatchObject({ id: 'provider-b', submit: { path: 'b-v2' } })
   })
 
+  it('removes an unchanged deployed preset without history when it disappears from deployment', () => {
+    const previousConfig = {
+      customProviders: [
+        { id: 'provider-a', name: 'Provider A', submit: { path: 'a' } },
+        { id: 'provider-b', name: 'Provider B', submit: { path: 'b' } },
+      ],
+      profiles: [
+        createDefaultOpenAIProfile({ id: 'profile-a', provider: 'provider-a', isDefault: true }),
+        createDefaultOpenAIProfile({ id: 'profile-b', provider: 'provider-b' }),
+      ],
+    }
+    const initial = mergeDefaultImportedSettings(DEFAULT_SETTINGS, previousConfig)
+    const current = initial.settings
+    const previousPresetConfig = initial.presetConfig
+    const nextConfig = {
+      customProviders: [previousConfig.customProviders[0]],
+      profiles: [previousConfig.profiles[0]],
+    }
+
+    const removed = mergeDefaultImportedSettings(current, nextConfig, {
+      previousPresetConfig,
+    }).settings
+    const retainedForHistory = mergeDefaultImportedSettings(current, nextConfig, {
+      previousPresetConfig,
+      usedPresetProfileIds: ['profile-b'],
+    })
+    const removedAfterHistoryCleared = mergeDefaultImportedSettings(retainedForHistory.settings, nextConfig, {
+      previousPresetConfig: retainedForHistory.presetConfig,
+    }).settings
+    const modified = mergeDefaultImportedSettings(normalizeSettings({
+      ...current,
+      profiles: current.profiles.map((profile) => profile.id === 'profile-b' ? { ...profile, model: 'user-model' } : profile),
+    }), nextConfig, {
+      previousPresetConfig,
+    }).settings
+    const modifiedProvider = mergeDefaultImportedSettings(normalizeSettings({
+      ...current,
+      customProviders: current.customProviders.map((provider) =>
+        provider.id === 'provider-b' ? { ...provider, submit: { ...provider.submit, path: 'user-b' } } : provider,
+      ),
+    }), nextConfig, {
+      previousPresetConfig,
+    }).settings
+
+    expect(removed.profiles.map((profile) => profile.id)).toEqual(['profile-a'])
+    expect(removed.customProviders.map((provider) => provider.id)).toEqual(['provider-a'])
+    expect(retainedForHistory.settings.profiles.map((profile) => profile.id)).toEqual(['profile-a', 'profile-b'])
+    expect(retainedForHistory.settings.customProviders.map((provider) => provider.id)).toEqual(['provider-a', 'provider-b'])
+    expect(removedAfterHistoryCleared.profiles.map((profile) => profile.id)).toEqual(['profile-a'])
+    expect(removedAfterHistoryCleared.customProviders.map((provider) => provider.id)).toEqual(['provider-a'])
+    expect(modified.profiles[1]).toMatchObject({ id: 'profile-b', model: 'user-model' })
+    expect(modified.customProviders.map((provider) => provider.id)).toEqual(['provider-a', 'provider-b'])
+    expect(modifiedProvider.profiles.map((profile) => profile.id)).toEqual(['profile-a', 'profile-b'])
+    expect(modifiedProvider.customProviders[1]).toMatchObject({ id: 'provider-b', submit: { path: 'user-b' } })
+  })
+
+  it('removes an untouched unlocked preset after it is updated and then removed from deployment', () => {
+    const initialConfig = {
+      customProviders: [
+        { id: 'provider-a', name: 'Provider A', submit: { path: 'a-v1' } },
+        { id: 'provider-b', name: 'Provider B', submit: { path: 'b-v1' } },
+      ],
+      profiles: [
+        createDefaultOpenAIProfile({ id: 'profile-a', provider: 'provider-a', isDefault: true }),
+        createDefaultOpenAIProfile({ id: 'profile-b', provider: 'provider-b', model: 'model-v1' }),
+      ],
+    }
+    const initial = mergeDefaultImportedSettings(DEFAULT_SETTINGS, initialConfig)
+    const updatedConfig = {
+      customProviders: [
+        initialConfig.customProviders[0],
+        { ...initialConfig.customProviders[1], submit: { path: 'b-v2' } },
+      ],
+      profiles: [
+        initialConfig.profiles[0],
+        { ...initialConfig.profiles[1], model: 'model-v2' },
+      ],
+    }
+    const updated = mergeDefaultImportedSettings(initial.settings, updatedConfig, {
+      previousPresetConfig: initial.presetConfig,
+    })
+    const removed = mergeDefaultImportedSettings(updated.settings, {
+      customProviders: [updatedConfig.customProviders[0]],
+      profiles: [updatedConfig.profiles[0]],
+    }, {
+      previousPresetConfig: updated.presetConfig,
+    }).settings
+
+    expect(updated.settings.profiles[1].model).toBe('model-v1')
+    expect(updated.settings.customProviders[1].submit.path).toBe('b-v1')
+    expect(removed.profiles.map((profile) => profile.id)).toEqual(['profile-a'])
+    expect(removed.customProviders.map((provider) => provider.id)).toEqual(['provider-a'])
+  })
+
   it('does not import preset profiles dismissed by the user', () => {
     const current = normalizeSettings({
       ...DEFAULT_SETTINGS,
