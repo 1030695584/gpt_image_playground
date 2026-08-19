@@ -182,15 +182,18 @@
 
 支持多种部署与开发方式。
 
+<a id="preset-config"></a>
+### 预置配置说明
+
 所有部署方式都可以通过环境变量提供"预置配置"——部署端预先加入用户配置列表的 API 配置。用户打开页面时会自动看到这些配置，无需手动创建，格式和用户自己创建的配置完全一致。
 
 环境变量的值支持三种填写方式：
 
 | 填写方式 | 说明 | 示例 |
 |------|------|------|
-| **直接填写 API 地址** | 自动创建一个 OpenAI 兼容的默认预置配置并注入 API URL，其余参数（模型、超时等）使用应用默认值，用户只需补充 API Key。适合只提供一个配置的部署。 | `https://api.openai.com/v1` |
+| **直接填写 API 地址** | 自动创建一个 OpenAI 兼容的默认预置配置并注入 API URL，其余参数（模型、超时等）使用应用默认值，用户只需补充 API Key。末尾带 `/` 时直接拼接接口，不补 `/v1` 前缀。适合只提供一个配置的部署。 | `https://api.openai.com/v1` |
 | **API 地址 + 查询参数** | 在地址后追加参数，可同时预填 Key、模型等字段。 | `https://api.openai.com/v1?model=gpt-image-2&apiMode=responses` |
-| **JSON 配置文件 / 分享链接** | 通过 JSON 文件（远程 URL / 本地路径）或含 `?settings=` 参数的分享链接提供完整预置配置，支持预置多个配置（OpenAI 兼容、fal.ai 或自定义供应商）。 | 详见 [预置配置 JSON 格式](#preset-config-json) |
+| **JSON 配置文件 / 导入链接** | 通过仓库内或本地的 JSON 文件路径（如 `./config.json`）、远程 URL 或含 `?settings=` 参数的导入链接提供完整预置配置，支持预置多个配置（OpenAI 兼容、fal.ai 或自定义供应商）。 | 详见 [预置配置 JSON 格式](#preset-config-json) |
 
 **环境变量一览**
 
@@ -211,14 +214,16 @@
 
 > 兼容提示：旧变量 `VITE_SHOW_DEFAULT_CONFIG_ONLY`／`SHOW_DEFAULT_CONFIG_ONLY` 仍可使用，等同于对应的 `SHOW_PRESET_CONFIG_ONLY`。
 
+### 部署方式
+
 <details>
 <summary><strong>▲ 方式一：Vercel 一键部署 (推荐)</strong></summary>
 
+支持通过 Vercel 一键导入 GitHub 仓库并自动完成构建部署。
+
 **预置配置**
 
-在 Vercel 项目的 **Settings → Environment Variables** 中设置 `VITE_DEFAULT_API_URL`，支持上述三种填写方式（详见 [预置配置 JSON 格式](#preset-config-json)）。
-
-Vercel 会在构建时读取该变量。若值指向远程 `.json` 文件或本地路径，内容会在构建时抓取并内嵌到页面，用户浏览器不需要访问原始地址。
+在 Vercel 项目的 **Settings → Environment Variables** 中设置 `VITE_DEFAULT_API_URL`，支持上述三种填写方式，可直接填写 API 地址或指定配置文件路径（如仓库内的 [`gpt-image-config.example.json`](gpt-image-config.example.json) 模板）。详见 [预置配置说明](#preset-config)。
 
 ```dotenv
 VITE_DEFAULT_API_URL=https://api.openai.com/v1
@@ -239,20 +244,39 @@ VITE_DEFAULT_API_URL=https://api.openai.com/v1
 1. 在 Vercel 项目设置 **Settings -> Git** 的 **Deploy Hooks** 中创建一个名为 `Release` 的 Hook（Branch 填 `main`）并复制生成的 URL。
 2. 在你 Fork 的 GitHub 仓库设置 **Settings -> Secrets and variables -> Actions** 中，新建 Secret `VERCEL_DEPLOY_HOOK`，填入刚才的 URL。
 
-此后，每次在 GitHub 点击 **Sync fork** 同步包含新 Release 的上游代码时，都会自动触发 Vercel 构建部署。普通提交不会触发部署。
+此后，只有在上游发布了正式版本（即包含新 Release / 版本号变动）时，在 GitHub 点击 **Sync fork** 才会自动触发 Vercel 构建部署；日常的普通代码提交不会触发部署。
 
 </details>
 
 <details>
-<summary><strong>☁️ 方式二：Cloudflare Workers 部署</strong></summary>
+<summary><strong>🌐 方式二：GitHub Pages 部署</strong></summary>
 
-项目已内置 Wrangler 配置，可将 Vite 构建产物作为 Cloudflare Workers 静态资源部署。
+支持通过 GitHub Actions 工作流将静态页面一键发布至 GitHub Pages。
 
 **预置配置**
 
-在执行构建前设置环境变量 `VITE_DEFAULT_API_URL`，支持上述三种填写方式（详见 [预置配置 JSON 格式](#preset-config-json)）。Cloudflare Workers 不会在部署后改写静态文件，因此必须在构建前完成设置。
+在仓库 **Settings → Secrets and variables → Actions** 中添加 Secret `VITE_DEFAULT_API_URL`，支持上述三种填写方式，可直接填写 API 地址或指定配置文件路径（如仓库内的 [`gpt-image-config.example.json`](gpt-image-config.example.json) 模板）。详见 [预置配置说明](#preset-config)。
 
-构建时若值指向远程 `.json` 文件或本地路径，内容会自动内嵌到页面。
+```dotenv
+VITE_DEFAULT_API_URL=https://api.openai.com/v1
+```
+
+**部署**
+
+1. 在 GitHub 仓库的 **Settings → Pages** 中，将 **Build and deployment → Source** 设置为 **GitHub Actions**。
+2. 进入仓库顶部的 **Actions** 标签页，在左侧工作流列表中选择 **Deploy to GitHub Pages**。
+3. 点击右侧的 **Run workflow** 下拉按钮，分支选择 `main`，然后点击绿色的 **Run workflow** 按钮开始构建部署。
+
+</details>
+
+<details>
+<summary><strong>☁️ 方式三：Cloudflare Workers 部署</strong></summary>
+
+支持通过内置的 Wrangler 配置将构建产物作为静态资源部署至 Cloudflare Workers。
+
+**预置配置**
+
+在执行构建前设置环境变量 `VITE_DEFAULT_API_URL`，支持上述三种填写方式，可直接填写 API 地址或指定配置文件路径（如仓库内的 [`gpt-image-config.example.json`](gpt-image-config.example.json) 模板）。Cloudflare Workers 不会在部署后改写静态文件，因此必须在构建前完成设置。详见 [预置配置说明](#preset-config)。
 
 ```dotenv
 VITE_DEFAULT_API_URL=https://api.openai.com/v1
@@ -278,15 +302,15 @@ npm run deploy:cf
 
 <a id="docker-deployment"></a>
 <details>
-<summary><strong>🐳 方式三：Docker 部署</strong></summary>
+<summary><strong>🐳 方式四：Docker 部署</strong></summary>
 
-官方镜像已发布至 GitHub Container Registry。
+支持通过官方发布的 Docker 镜像在服务器或本地容器环境中快速运行。
 
 **环境变量**
 
 | 变量 | 说明 |
 |------|------|
-| `DEFAULT_API_URL` | 预置配置，支持上述三种填写方式（详见 [预置配置 JSON 格式](#preset-config-json)）。若值指向 `.json` 文件或容器内路径，容器启动时自动读取并内嵌到页面。宿主机文件需通过 volume 挂载 |
+| `DEFAULT_API_URL` | 预置配置，支持上述三种填写方式。若值指向 `.json` 文件或容器内路径，容器启动时自动读取并内嵌到页面。宿主机文件需通过 volume 挂载。详见 [预置配置说明](#preset-config) |
 | `ENABLE_API_PROXY=true` | 开启 Nginx 同源代理，请求发往 `/api-proxy/{路径}` 再转发到 `API_PROXY_URL` |
 | `API_PROXY_URL` | 代理转发的完整 API 基础地址（不自动补 `/v1`） |
 | `LOCK_API_PROXY=true` | 强制锁定代理为开启，用户无法关闭 |
@@ -354,11 +378,13 @@ services:
 </details>
 
 <details>
-<summary><strong>💻 方式四：本地开发与静态构建</strong></summary>
+<summary><strong>💻 方式五：本地开发与静态构建</strong></summary>
+
+支持在本地通过 Node.js 环境运行开发服务器或构建生产静态文件。
 
 **1. 预置配置（可选）**
 
-在项目根目录新建 `.env.local` 文件，设置 `VITE_DEFAULT_API_URL`，支持上述三种填写方式（详见 [预置配置 JSON 格式](#preset-config-json)）。
+在项目根目录新建 `.env.local` 文件，设置 `VITE_DEFAULT_API_URL`，支持上述三种填写方式，可直接填写 API 地址或指定配置文件路径（如仓库内的 [`gpt-image-config.example.json`](gpt-image-config.example.json) 模板）。详见 [预置配置说明](#preset-config)。
 
 开发服务器启动或构建时若值指向远程 `.json` 文件或本地路径，内容会自动内嵌到页面。
 
@@ -503,26 +529,23 @@ https://cooksleep.github.io/gpt_image_playground?apiUrl={address}&apiKey={key}&m
 
 预置配置 JSON 可以通过以下三种方式填入部署环境变量（`VITE_DEFAULT_API_URL` 或 Docker 的 `DEFAULT_API_URL`）：
 
-**1. 分享链接（最简单）**
+**1. 导入链接（单配置导入，最简单）**
 
-在项目的 [Vercel 在线体验](https://gpt-image-playground.cooksleep.dev) 或 [GitHub Pages 在线体验](https://cooksleep.github.io/gpt_image_playground) 中生成配置后，点"链接按钮"复制含 `?settings=` 参数的 URL，直接填入环境变量即可。复制时可选择不包含 API Key，并使用 `{address}`、`{key}`、`{model}` 等变量便于集成分享。
+在项目的 [Vercel 在线体验](https://gpt-image-playground.cooksleep.dev) 或 [GitHub Pages 在线体验](https://cooksleep.github.io/gpt_image_playground) 中配置好某个条目后，点击“链接”按钮复制含 `?settings=` 参数的 URL（请勿勾选任何“New API 变量配置”选项），直接填入环境变量即可。
+
+
+> 💡 **提示**：页面中的“复制导入配置 URL”按钮导出的是**当前选中的单个配置**及其关联的自定义供应商。如需一次性预置包含多个服务商的列表，请使用下方的本地/仓库文件或远程 URL 方式。
 
 ```dotenv
 VITE_DEFAULT_API_URL=https://你的域名?settings=%7B%22customProviders%22%3A%5B...%5D%2C%22profiles%22%3A%5B...%5D%7D
 ```
 
-**2. HTTP／HTTPS 配置文件**
+**2. 仓库内／本地配置文件（推荐）**
 
-将 JSON 保存到部署服务器能够访问的 URL（可位于内网，不要求用户浏览器能访问）。构建时或容器启动时会自动读取并内嵌到页面。
-
-```dotenv
-VITE_DEFAULT_API_URL=https://example.com/gpt-image-config.json
-```
-
-**3. 本地配置文件**
+支持直接指定仓库根目录或本地文件相对路径（如 `./gpt-image-config.example.json` 或 `./config/my-presets.json`），构建时会自动读取并内嵌到静态页面中。
 
 ```dotenv
-VITE_DEFAULT_API_URL=./config/gpt-image-config.json
+VITE_DEFAULT_API_URL=./gpt-image-config.example.json
 ```
 
 Docker 需要通过 volume 挂载宿主机文件到容器内路径：
@@ -535,6 +558,14 @@ docker run -d -p 8080:80 \
 ```
 
 > Docker 环境变量名为 `DEFAULT_API_URL`（不含 `VITE_` 前缀）。
+
+**3. HTTP／HTTPS 远程配置文件**
+
+将 JSON 保存到部署服务器能够访问的 URL（可位于内网，不要求用户浏览器能访问）。构建时或容器启动时会自动读取并内嵌到页面。
+
+```dotenv
+VITE_DEFAULT_API_URL=https://example.com/gpt-image-config.json
+```
 
 ---
 
