@@ -41,7 +41,7 @@
   ],
   "profiles": [
     {
-      "id": "default-openai",
+      "id": "gpt_image_playground-default-openai",
       "name": "默认",
       "provider": "openai",
       "baseUrl": "https://api.openai.com/v1",

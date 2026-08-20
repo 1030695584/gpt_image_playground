@@ -8,11 +8,15 @@ const PREVENT_PRESET_CONFIG_DELETION = readRuntimeEnv(import.meta.env.VITE_PREVE
 
 let presetProfiles: ApiProfile[] = []
 let presetProviders: CustomProviderDefinition[] = []
+let presetProfileFields: Record<string, string[]> | undefined
 let defaultPresetProfileId: string | null = null
 
-export function setPresetConfig(settings: Pick<AppSettings, 'customProviders' | 'profiles'> | null) {
+export function setPresetConfig(settings: Pick<AppSettings, 'customProviders' | 'profiles'> & {
+  presetProfileFields?: Record<string, string[]>
+} | null) {
   presetProfiles = settings?.profiles.map((profile) => ({ ...profile })) ?? []
   presetProviders = settings?.customProviders.map((provider) => ({ ...provider })) ?? []
+  presetProfileFields = settings?.presetProfileFields
   defaultPresetProfileId = presetProfiles.length === 1
     ? presetProfiles[0].id
     : presetProfiles.find((profile) => profile.isDefault === true)?.id ?? null
@@ -35,6 +39,7 @@ export function getPresetConfig() {
   return {
     customProviders: presetProviders.map((provider) => ({ ...provider })),
     profiles: presetProfiles.map((profile) => ({ ...profile })),
+    presetProfileFields,
   }
 }
 

@@ -534,9 +534,12 @@ describe('mergePresetImportedSettings', () => {
     }],
   })
 
-  it('updates preset API URLs while keeping other local parameters unlocked', () => {
-    const previous = mergeDefaultImportedSettings(DEFAULT_SETTINGS, createConfig('model-v1', 'old/generate')).settings
-    previous.profiles[0].baseUrl = 'https://old.example.com/v1'
+  it('applies each deployment change once and then keeps later local edits', () => {
+    const initial = mergeDefaultImportedSettings(DEFAULT_SETTINGS, createConfig('model-v1', 'old/generate'))
+    const previous = initial.settings
+    previous.profiles[0].baseUrl = 'https://local.example.com/v1'
+    previous.profiles[0].model = 'local-model'
+    previous.profiles[0].timeout = 900
     const current = normalizeSettings({
       ...previous,
       profiles: [
@@ -546,18 +549,52 @@ describe('mergePresetImportedSettings', () => {
     })
     const nextConfig = createConfig('model-v2', 'v2/generate')
     nextConfig.profiles[0].baseUrl = 'https://new.example.com/v1'
-    const result = mergeDefaultImportedSettings(current, nextConfig)
+    nextConfig.profiles[0].timeout = 600
+    const result = mergeDefaultImportedSettings(current, nextConfig, { previousPresetConfig: initial.presetConfig })
     const merged = result.settings
 
+    expect(merged.profiles[0]).toMatchObject({
+      baseUrl: 'https://new.example.com/v1',
+      model: 'model-v2',
+      timeout: 600,
+    })
+    expect(merged.customProviders[0]).toMatchObject({ submit: { path: 'v2/generate' } })
+
+    merged.profiles[0].baseUrl = 'https://later-local.example.com/v1'
+    merged.profiles[0].model = 'later-local-model'
+    merged.profiles[0].timeout = 1200
+    merged.customProviders[0].submit.path = 'later-local/generate'
+    const repeated = mergeDefaultImportedSettings(merged, nextConfig, { previousPresetConfig: result.presetConfig })
+    const lastConfig = createConfig('model-v3', 'v2/generate')
+    lastConfig.customProviders[0].name = 'Updated Provider'
+    lastConfig.profiles[0].baseUrl = 'https://new.example.com/v1'
+    lastConfig.profiles[0].timeout = 600
+    const changedAgain = mergeDefaultImportedSettings(repeated.settings, lastConfig, { previousPresetConfig: repeated.presetConfig })
+
     expect(merged.activeProfileId).toBe('source-profile')
-    expect(merged.profiles.map((profile) => profile.model)).toEqual(['model-v1', DEFAULT_FAL_MODEL])
+    expect(merged.profiles.map((profile) => profile.model)).toEqual(['later-local-model', DEFAULT_FAL_MODEL])
     expect(merged.profiles[0]).toMatchObject({
       id: 'source-profile',
-      baseUrl: 'https://new.example.com/v1',
+      baseUrl: 'https://later-local.example.com/v1',
+      timeout: 1200,
       isDefault: true,
     })
     expect(merged.customProviders).toHaveLength(1)
-    expect(merged.customProviders[0]).toMatchObject({ id: 'source-provider', submit: { path: 'old/generate' } })
+    expect(repeated.settings.profiles[0]).toMatchObject({
+      baseUrl: 'https://later-local.example.com/v1',
+      model: 'later-local-model',
+      timeout: 1200,
+    })
+    expect(repeated.settings.customProviders[0]).toMatchObject({ id: 'source-provider', submit: { path: 'later-local/generate' } })
+    expect(changedAgain.settings.profiles[0]).toMatchObject({
+      baseUrl: 'https://later-local.example.com/v1',
+      model: 'model-v3',
+      timeout: 1200,
+    })
+    expect(changedAgain.settings.customProviders[0]).toMatchObject({
+      name: 'Updated Provider',
+      submit: { path: 'v2/generate' },
+    })
   })
 
   it('updates matching preset parameters when parameters are locked', () => {
@@ -641,8 +678,9 @@ describe('mergePresetImportedSettings', () => {
         timeout: 300,
         apiProxy: false,
       }],
-    }))
-    const current = mergeDefaultImportedSettings(DEFAULT_SETTINGS, previousConfig).settings
+    }), [], { deploymentConfig: true })
+    const initial = mergeDefaultImportedSettings(DEFAULT_SETTINGS, previousConfig)
+    const current = initial.settings
     current.profiles[0] = {
       ...current.profiles[0],
       name: '本地名称',
@@ -659,17 +697,46 @@ describe('mergePresetImportedSettings', () => {
         baseUrl: 'https://new.example.com/v1',
         model: 'model-v2',
       }],
-    }))
+    }), [], { deploymentConfig: true })
 
-    const merged = mergeDefaultImportedSettings(current, nextConfig).settings
+    const merged = mergeDefaultImportedSettings(current, nextConfig, {
+      previousPresetConfig: initial.presetConfig,
+    }).settings
 
     expect(merged.profiles[0]).toMatchObject({
       name: '本地名称',
       baseUrl: 'https://new.example.com/v1',
       apiKey: 'user-key',
-      model: 'model-v1',
+      model: 'model-v2',
       timeout: 900,
       apiProxy: true,
+    })
+  })
+
+  it('uses new provider defaults when a deployment changes the provider type', () => {
+    const initialConfig = importCustomProviderSettingsFromJson(JSON.stringify({
+      customProviders: [{ id: 'source-provider', name: 'Provider', submit: { path: 'generate' } }],
+      profiles: [{
+        id: 'source-profile',
+        provider: 'source-provider',
+        baseUrl: 'https://custom.example.com/v1',
+        model: 'custom-model',
+      }],
+    }), [], { deploymentConfig: true })
+    const initial = mergeDefaultImportedSettings(DEFAULT_SETTINGS, initialConfig)
+    const nextConfig = importCustomProviderSettingsFromJson(JSON.stringify({
+      customProviders: [],
+      profiles: [{ id: 'source-profile', provider: 'fal' }],
+    }), [], { deploymentConfig: true })
+
+    const merged = mergeDefaultImportedSettings(initial.settings, nextConfig, {
+      previousPresetConfig: initial.presetConfig,
+    }).settings
+
+    expect(merged.profiles[0]).toMatchObject({
+      provider: 'fal',
+      baseUrl: DEFAULT_FAL_BASE_URL,
+      model: DEFAULT_FAL_MODEL,
     })
   })
 
@@ -920,7 +987,7 @@ describe('mergePresetImportedSettings', () => {
     expect(modifiedProvider.customProviders[1]).toMatchObject({ id: 'provider-b', submit: { path: 'user-b' } })
   })
 
-  it('removes an untouched unlocked preset after it is updated and then removed from deployment', () => {
+  it('removes an untouched unlocked preset after applying a deployment update', () => {
     const initialConfig = {
       customProviders: [
         { id: 'provider-a', name: 'Provider A', submit: { path: 'a-v1' } },
@@ -952,8 +1019,8 @@ describe('mergePresetImportedSettings', () => {
       previousPresetConfig: updated.presetConfig,
     }).settings
 
-    expect(updated.settings.profiles[1].model).toBe('model-v1')
-    expect(updated.settings.customProviders[1].submit.path).toBe('b-v1')
+    expect(updated.settings.profiles[1].model).toBe('model-v2')
+    expect(updated.settings.customProviders[1].submit.path).toBe('b-v2')
     expect(removed.profiles.map((profile) => profile.id)).toEqual(['profile-a'])
     expect(removed.customProviders.map((provider) => provider.id)).toEqual(['provider-a'])
   })

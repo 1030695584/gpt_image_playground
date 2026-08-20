@@ -711,6 +711,7 @@ export function isOpenAICompatibleProvider(settings: Partial<AppSettings> | unkn
 export interface ImportedProviderSettings {
   customProviders: CustomProviderDefinition[]
   profiles: ApiProfile[]
+  presetProfileFields?: Record<string, string[]>
 }
 
 function validateCustomProviderTaskMappings(providers: CustomProviderDefinition[]) {
@@ -753,9 +754,15 @@ export function importCustomProviderSettingsFromJson(
     }
     validateCustomProviderTaskMappings(customProviders)
     const customProviderIds = new Set(customProviders.map((provider) => provider.id))
-    const profiles = normalizeDeploymentProfileEntries(record.profiles, customProviderIds, options.deploymentConfig)
-      .map((entry) => entry.profile)
-    return { customProviders, profiles }
+    const profileEntries = normalizeDeploymentProfileEntries(record.profiles, customProviderIds, options.deploymentConfig)
+    const profiles = profileEntries.map((entry) => entry.profile)
+    if (!options.deploymentConfig) return { customProviders, profiles }
+
+    return {
+      customProviders,
+      profiles,
+      presetProfileFields: Object.fromEntries(profileEntries.map((entry) => [entry.profile.id, Object.keys(entry.source)])),
+    }
   }
 
   // 单个 Manifest 对象：{name, submit, ...}
@@ -995,6 +1002,38 @@ export function mergeImportedSettings(
   })
 }
 
+const PRESET_PROFILE_DEPLOYMENT_KEYS = [
+  'name',
+  'description',
+  'provider',
+  'baseUrl',
+  'model',
+  'timeout',
+  'apiMode',
+  'reasoningEffort',
+  'codexCli',
+  'apiProxy',
+  'responseFormatB64Json',
+  'streamImages',
+  'streamPartialImages',
+  'providerDrafts',
+] as const
+
+function getPresetDeploymentFields(input: unknown, id: string, source: object) {
+  if (!isRecord(input) || !Array.isArray(input[id])) return new Set(Object.keys(source))
+  return new Set(input[id].filter((key): key is string => typeof key === 'string'))
+}
+
+function mergePresetProfileSnapshot(previous: ApiProfile, imported: ApiProfile, fields: Set<string>) {
+  if (previous.provider !== imported.provider) return imported
+
+  const patch: Partial<ApiProfile> = {}
+  for (const key of PRESET_PROFILE_DEPLOYMENT_KEYS) {
+    if (fields.has(key)) Object.assign(patch, { [key]: imported[key] })
+  }
+  return { ...previous, ...patch, id: imported.id, isDefault: imported.isDefault }
+}
+
 export function mergePresetImportedSettings(
   currentSettings: Partial<AppSettings> | unknown,
   importedSettings: Partial<AppSettings> | unknown,
@@ -1013,6 +1052,7 @@ export function mergePresetImportedSettings(
   const customProviderIds = new Set(normalizedImported.customProviders.map((provider) => provider.id))
   const allSourceProfileEntries = normalizeDeploymentProfileEntries(importedRecord.profiles, customProviderIds, true).map((entry) => ({
     profile: entry.profile,
+    source: entry.source,
     isDefault: entry.source.isDefault === true,
   }))
   const dismissedIds = new Set(options.dismissedPresetProfileIds ?? [])
@@ -1025,13 +1065,16 @@ export function mergePresetImportedSettings(
     : allSourceProfileEntries.find((entry) => entry.isDefault)?.profile.id ?? null
   const replacingPristineDefault = sourceProfiles.length > 0 && hasOnlyDefaultProfiles(current)
   const currentProvidersById = new Map(current.customProviders.map((provider) => [provider.id, provider]))
-  const nextProviders = normalizedImported.customProviders.filter((provider) => !dismissedProviderIds.has(provider.id)).map((provider) => {
-    const matched = currentProvidersById.get(provider.id)
-    return matched && !options.lockPresetParams ? matched : provider
-  })
-  const sourceProviderIds = new Set(normalizedImported.customProviders.map((provider) => provider.id))
   const previousProfilesById = new Map(options.previousPresetConfig?.profiles.map((profile) => [profile.id, profile]) ?? [])
   const previousProvidersById = new Map(options.previousPresetConfig?.customProviders.map((provider) => [provider.id, provider]) ?? [])
+  const nextProviders = normalizedImported.customProviders.filter((provider) => !dismissedProviderIds.has(provider.id)).map((provider) => {
+    const matched = currentProvidersById.get(provider.id)
+    const previous = previousProvidersById.get(provider.id)
+    if (!matched || options.lockPresetParams) return provider
+    if (!previous || JSON.stringify(provider) === JSON.stringify(previous)) return matched
+    return provider
+  })
+  const sourceProviderIds = new Set(normalizedImported.customProviders.map((provider) => provider.id))
   const usedPresetProfileIds = new Set(options.usedPresetProfileIds ?? [])
   const modifiedProviderIds = new Set(current.customProviders
     .filter((provider) => {
@@ -1050,13 +1093,26 @@ export function mergePresetImportedSettings(
   const currentProfilesById = new Map(current.profiles.map((profile) => [profile.id, profile]))
   const nextProfiles = sourceProfileEntries.map((entry) => {
     const matched = replacingPristineDefault ? undefined : currentProfilesById.get(entry.profile.id)
-    const importedProfile = {
+    const normalizedProfile = {
       ...entry.profile,
       isDefault: entry.profile.id === sourceDefaultProfileId ? true : undefined,
     }
+    const previous = previousProfilesById.get(entry.profile.id)
+    const fields = getPresetDeploymentFields(importedRecord.presetProfileFields, entry.profile.id, entry.source)
+    const importedProfile = previous
+      ? mergePresetProfileSnapshot(previous, normalizedProfile, fields)
+      : normalizedProfile
     if (!matched) return importedProfile
     if (options.lockPresetParams) return { ...importedProfile, apiKey: matched.apiKey }
-    return { ...matched, baseUrl: importedProfile.baseUrl, isDefault: importedProfile.isDefault }
+    if (!previous) return { ...matched, baseUrl: importedProfile.baseUrl, isDefault: importedProfile.isDefault }
+
+    const changed: Partial<ApiProfile> = {}
+    for (const key of PRESET_PROFILE_DEPLOYMENT_KEYS) {
+      if (JSON.stringify(importedProfile[key]) !== JSON.stringify(previous[key])) {
+        Object.assign(changed, { [key]: importedProfile[key] })
+      }
+    }
+    return { ...matched, ...changed, isDefault: importedProfile.isDefault }
   })
   const nextProfilesById = new Map(nextProfiles.map((profile) => [profile.id, profile]))
   const profiles = replacingPristineDefault
@@ -1075,22 +1131,19 @@ export function mergePresetImportedSettings(
       return !unchangedRemovedPreset || profiles.some((profile) => profile.provider === provider.id)
     })
   const customProviders = [...nextProviders, ...retainedProviders]
-  const presetProviders = normalizedImported.customProviders.map((provider) => {
-    const previous = previousProvidersById.get(provider.id)
-    return previous && !options.lockPresetParams ? previous : provider
-  })
+  const presetProviders = [...normalizedImported.customProviders]
   for (const provider of options.previousPresetConfig?.customProviders ?? []) {
     if (!sourceProviderIds.has(provider.id) && customProviders.some((item) => item.id === provider.id)) presetProviders.push(provider)
   }
   const presetProfiles: ApiProfile[] = allSourceProfileEntries.map((entry) => {
-    const importedProfile = {
+    const normalizedProfile = {
       ...entry.profile,
       isDefault: entry.profile.id === sourceDefaultProfileId ? true : undefined,
     }
     const previous = previousProfilesById.get(entry.profile.id)
-    if (!previous) return importedProfile
-    if (options.lockPresetParams) return { ...importedProfile, apiKey: previous.apiKey }
-    return { ...previous, baseUrl: importedProfile.baseUrl, isDefault: importedProfile.isDefault }
+    if (!previous) return normalizedProfile
+    const fields = getPresetDeploymentFields(importedRecord.presetProfileFields, entry.profile.id, entry.source)
+    return mergePresetProfileSnapshot(previous, normalizedProfile, fields)
   })
   for (const profile of options.previousPresetConfig?.profiles ?? []) {
     if (!sourceProfileIds.has(profile.id) && profiles.some((item) => item.id === profile.id)) presetProfiles.push(profile)
