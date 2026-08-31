@@ -1,6 +1,42 @@
 {
   "customProviders": [
     {
+      "id": "custom-apimart",
+      "name": "APIMart",
+      "submit": {
+        "path": "images/generations",
+        "method": "POST",
+        "contentType": "json",
+        "body": {
+          "model": "$profile.model",
+          "prompt": "$prompt",
+          "size": "$params.size",
+          "quality": "$params.quality",
+          "output_format": "$params.output_format",
+          "output_compression": "$params.output_compression",
+          "moderation": "$params.moderation",
+          "n": "$params.n",
+          "background": "$params.background",
+          "image_urls": "$inputImages.dataUrls",
+          "mask_url": "$mask.dataUrl"
+        },
+        "taskIdPath": "data.0.task_id"
+      },
+      "poll": {
+        "path": "tasks/{task_id}",
+        "method": "GET",
+        "intervalSeconds": 5,
+        "statusPath": "data.status",
+        "successValues": ["completed"],
+        "failureValues": ["failed"],
+        "errorPath": "data.error.message",
+        "result": {
+          "imageUrlPaths": ["data.result.images.*.url.*"],
+          "b64JsonPaths": []
+        }
+      }
+    },
+    {
       "id": "custom-9527-code",
       "name": "9527 CODE",
       "template": "http-image",
@@ -59,6 +95,15 @@
       "apiMode": "images"
     },
     {
+      "id": "jucodex",
+      "name": "JuCodex",
+      "description": "[JuCodex](https://jucodex.com/register?aff=3JDW) 为企业级用户打造的高可用、低延迟、极致性价比的中转站，提供 Codex、Claude Code、Grok 等主流大模型中转服务，新用户注册送 3 元（QQ 邮箱），永久承诺 0 水 0 替、模型 100% 保真。[生图工作台](https://image.jucodex.com)",
+      "provider": "openai",
+      "baseUrl": "https://api.sz-link.com/v1",
+      "model": "gpt-image-2",
+      "apiMode": "images"
+    },
+    {
       "id": "marucode",
       "name": "MaruCode",
       "description": "[MaruCode](https://api.muteki.site/register?aff=CookSleep&promo=CookSleep) 是一家偶尔做做慈善的小破站 API，自营号池，主要提供 Codex、Claude Code、GPT Image 等主流模型，支持 Websocket 协议，明码标价(Codex 0.25x, CC 1.5x)，透明汇率(1:1)，[新用户注册送 2 刀](https://api.muteki.site/register?aff=CookSleep&promo=CookSleep)。[生图工作台](https://images-2.muteki.site)",
@@ -68,11 +113,11 @@
       "apiMode": "images"
     },
     {
-      "id": "jucodex",
-      "name": "JuCodex",
-      "description": "[JuCodex](https://jucodex.com/register?aff=3JDW) 为企业级用户打造的高可用、低延迟、极致性价比的中转站，提供 Codex、Claude Code、Grok 等主流大模型中转服务，新用户注册送 3 元（QQ 邮箱），永久承诺 0 水 0 替、模型 100% 保真。[生图工作台](https://image.jucodex.com)",
-      "provider": "openai",
-      "baseUrl": "https://api.sz-link.com/v1",
+      "id": "apimart",
+      "name": "APIMart",
+      "description": "[APIMart](https://go.apimart.ai/gh-gpt_image_playground) 是专注 AI 图片/视频生成的低价 API 平台，GPT-Image-2 低至 $0.006/张，1 美元可出图 160+ 张。图片、视频一套异步 API 通吃，提交任务拿 ID、回调取结果，跑批万张不超时、换模型不改代码。按量付费、无月费，通过[此注册链接](https://go.apimart.ai/gh-gpt_image_playground)注册即可开用。",
+      "provider": "custom-apimart",
+      "baseUrl": "https://api.apimart.ai/v1",
       "model": "gpt-image-2",
       "apiMode": "images"
     },
