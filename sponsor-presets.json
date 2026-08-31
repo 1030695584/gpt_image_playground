@@ -10,9 +10,15 @@
         "body": {
           "model": "$profile.model",
           "prompt": "$prompt",
-          "n": "$params.n",
           "size": "$params.size",
-          "image_urls": "$inputImages.dataUrls"
+          "quality": "$params.quality",
+          "output_format": "$params.output_format",
+          "output_compression": "$params.output_compression",
+          "moderation": "$params.moderation",
+          "n": "$params.n",
+          "background": "$params.background",
+          "image_urls": "$inputImages.dataUrls",
+          "mask_url": "$mask.dataUrl"
         },
         "taskIdPath": "data.0.task_id"
       },
