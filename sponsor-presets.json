@@ -158,16 +158,6 @@
       "baseUrl": "https://api.sublyx.org/v1",
       "model": "gpt-image-2",
       "apiMode": "images"
-    },
-    {
-      "id": "buzzai",
-      "name": "BuzzAI",
-      "description": "[BuzzAI](https://buzzai.cc/register?aff=gptimageplayground) 默认不保存聊天记录，不替换用户选择的模型。所有调用链路均自主建设与维护——不让你的数据流经任何我们无法负责的环节，也不让你的请求在你看不见的地方被一次次转发。",
-      "provider": "openai",
-      "baseUrl": "https://buzzai.cc/v1",
-      "model": "gpt-image-2",
-      "apiMode": "images",
-      "codexCli": true
     }
   ]
 }
