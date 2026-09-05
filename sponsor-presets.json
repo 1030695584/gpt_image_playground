@@ -142,15 +142,6 @@
       "codexCli": true
     },
     {
-      "id": "hezu-bus",
-      "name": "合租巴士",
-      "description": "[合租巴士](https://hezu.ink/sign-up?aff=jCQK) 是一家可靠高效 AI 中转服务平台，主要提供 Claude Code、Codex 等主流模型的高稳定中转能力，充值比例透明（1:1），Codex 倍率补贴低至 0.15。[进群送 3 刀体验金](https://hezu.ink/sign-up?aff=jCQK)",
-      "provider": "openai",
-      "baseUrl": "https://img.hezubus.cc/v1",
-      "model": "gpt-image-2",
-      "apiMode": "images"
-    },
-    {
       "id": "sublyx",
       "name": "Sublyx",
       "description": "[Sublyx](https://api.sublyx.org/register?aff=U62PAZERCHEA) 是一家稳定高效的 AI API 聚合网关，支持 OpenAI、Claude、Grok、Codex、gpt-image-2 等主流模型，兼容 OpenAI SDK、Claude Code、Codex、Cherry Studio 等常用工具。通过[链接注册](https://api.sublyx.org/register?aff=U62PAZERCHEA)并使用优惠码 `IMG2`，可额外领取 10 刀额度。[生图工作台](https://img2.icedit.ai)",
