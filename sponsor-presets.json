@@ -35,44 +35,6 @@
           "b64JsonPaths": []
         }
       }
-    },
-    {
-      "id": "custom-9527-code",
-      "name": "9527 CODE",
-      "template": "http-image",
-      "submit": {
-        "path": "api/image-tasks",
-        "method": "POST",
-        "contentType": "json",
-        "body": {
-          "model": "$profile.model",
-          "prompt": "$prompt",
-          "response_format": "url",
-          "async": true,
-          "size": "$params.size",
-          "quality": "$params.quality",
-          "output_format": "$params.output_format",
-          "output_compression": "$params.output_compression",
-          "moderation": "$params.moderation",
-          "n": "$params.n",
-          "images": "$inputImages.dataUrls",
-          "maskDataUrl": "$mask.dataUrl"
-        },
-        "taskIdPath": "task_id"
-      },
-      "poll": {
-        "path": "api/image-tasks/{task_id}",
-        "method": "GET",
-        "intervalSeconds": 2,
-        "statusPath": "status",
-        "successValues": ["succeeded"],
-        "failureValues": ["failed", "cancelled"],
-        "errorPath": "error.message",
-        "result": {
-          "imageUrlPaths": ["data.*.url"],
-          "b64JsonPaths": []
-        }
-      }
     }
   ],
   "profiles": [
@@ -123,22 +85,12 @@
       "apiMode": "images"
     },
     {
-      "id": "9527-code",
-      "name": "9527 CODE",
-      "description": "[9527 CODE](https://9527.codes) 是企业级满血 AI 中转服务平台，专注提供 Claude Code、Codex 等主流模型的高稳定中转能力，为企业级 AI 使用提供稳定、合规、高效的一站式解决方案。",
-      "provider": "custom-9527-code",
-      "baseUrl": "https://tu.9527.codes/",
-      "model": "gpt-image-2",
-      "apiMode": "images",
-      "apiProxy": false
-    },
-    {
       "id": "sublyx",
       "name": "Sublyx",
       "description": "[Sublyx](https://api.sublyx.org/register?aff=U62PAZERCHEA) 是一家稳定高效的 AI API 聚合网关，支持 OpenAI、Claude、Grok、Codex、gpt-image-2 等主流模型，兼容 OpenAI SDK、Claude Code、Codex、Cherry Studio 等常用工具。通过[链接注册](https://api.sublyx.org/register?aff=U62PAZERCHEA)并使用优惠码 `IMG2`，可额外领取 10 刀额度。[生图工作台](https://img2.icedit.ai)",
       "provider": "sb2api-async",
       "baseUrl": "https://api.sublyx.org/v1",
-      "model": "gpt-image-2",
+      "model": "gpt-image2.5-flare",
       "apiMode": "images"
     }
   ]
