@@ -456,8 +456,8 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
       commit([...elements, next])
       return
     }
-    // 编辑中可能只调了字号，内容相同也要比较字号，否则调整会被丢弃
-    if (existing.type === 'text' && existing.text === text && existing.fontSize === next.fontSize) return
+    // 编辑中可能只调了字号或颜色，内容相同也要比较，否则调整会被丢弃
+    if (existing.type === 'text' && existing.text === text && existing.fontSize === next.fontSize && existing.color === next.color) return
     commit(elements.map((el) => el.id === next.id ? next : el))
   }
 
@@ -688,6 +688,11 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
   const previewCustomColor = (next: string) => {
     setCustomColor(next)
     setColor(next)
+    const editing = editingRef.current
+    if (editing) {
+      setEditingText({ ...editing, color: next })
+      return
+    }
     if (!selected) return
     if (!colorBeforeRef.current) colorBeforeRef.current = elements
     setElements((items) => items.map((el) => el.id === selected.id ? { ...el, color: next } : el))
@@ -708,6 +713,12 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
 
   const applyColor = (next: string) => {
     setColor(next)
+    // 正在输入的文字直接换色，提交文字时一并记入历史
+    const editing = editingRef.current
+    if (editing) {
+      setEditingText({ ...editing, color: next })
+      return
+    }
     if (selected && selected.color !== next) {
       commit(elements.map((el) => el.id === selected.id ? { ...el, color: next } : el))
     }
@@ -989,7 +1000,8 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
 
       {/* 底部颜色与确认 */}
       <div className="flex flex-none items-center gap-3 px-3 py-3 sm:px-4">
-        <div ref={swatchesRef} className="flex min-w-0 flex-1 items-center gap-2.5 overflow-x-auto px-2 py-1.5 sm:justify-center [scrollbar-width:none]">
+        {/* 点按色块不抢焦点，输入文字时可以直接换色 */}
+        <div ref={swatchesRef} onMouseDown={(e) => e.preventDefault()} className="flex min-w-0 flex-1 items-center gap-2.5 overflow-x-auto px-2 py-1.5 sm:justify-center [scrollbar-width:none]">
           <span
             className="relative inline-flex flex-none"
             {...customColorTooltip.handlers}
