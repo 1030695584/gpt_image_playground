@@ -456,7 +456,8 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
       commit([...elements, next])
       return
     }
-    if (existing.type === 'text' && existing.text === text) return
+    // 编辑中可能只调了字号，内容相同也要比较字号，否则调整会被丢弃
+    if (existing.type === 'text' && existing.text === text && existing.fontSize === next.fontSize) return
     commit(elements.map((el) => el.id === next.id ? next : el))
   }
 
