@@ -12,6 +12,8 @@ import {
   SKETCH_HANDLES,
   SKETCH_LINE_HEIGHT,
   SKETCH_LONG_EDGE,
+  SKETCH_MAX_STROKE,
+  SKETCH_MIN_STROKE,
   SKETCH_SHAPES,
   drawEraseStroke,
   drawSketchElementWithErase,
@@ -97,8 +99,6 @@ const PALETTE = [
   { value: '#9333ea', label: '紫色' },
   { value: '#db2777', label: '粉色' },
 ]
-const MIN_STROKE = 2
-const MAX_STROKE = 160
 const MAX_HISTORY = 100
 const HANDLE_CURSORS: Record<SketchHandle, string> = {
   nw: 'nwse-resize',
@@ -388,7 +388,8 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     const handleKeyDown = (event: KeyboardEvent) => {
       // 只在文字输入时让出快捷键；取色器关闭后焦点仍停在颜色输入框上，不能拦截撤销
       if (event.target instanceof Element && event.target.closest('input:not([type="color"]), textarea, [contenteditable="true"]')) return
-      if (isSaving || useStore.getState().confirmDialog) return
+      // 调节粗细期间不响应快捷键，否则松手时记下的调节前快照会打乱撤销顺序
+      if (isSaving || widthBeforeRef.current || useStore.getState().confirmDialog) return
       const mod = event.ctrlKey || event.metaKey
       const key = event.key.toLowerCase()
       if (mod && key === 'z') {
@@ -715,6 +716,12 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
   const applyStrokeWidth = (next: number) => {
     if (next === strokeWidth) return
     setStrokeWidth(next)
+    // 正在输入的文字直接改字号，提交文字时一并记入历史
+    const editing = editingRef.current
+    if (editing) {
+      setEditingText({ ...editing, width: next, fontSize: getSketchFontSize(next) })
+      return
+    }
     if (!selected) return
     setElements((items) => items.map((el) => {
       if (el.id !== selected.id) return el
@@ -958,8 +965,8 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
 
         <EditorSizeSlider
           value={strokeWidth}
-          min={MIN_STROKE}
-          max={MAX_STROKE}
+          min={SKETCH_MIN_STROKE}
+          max={SKETCH_MAX_STROKE}
           label={tool === 'text' ? '字号' : '粗细'}
           displayValue={tool === 'text' ? getSketchFontSize(strokeWidth) : strokeWidth}
           disabled={!isReady}

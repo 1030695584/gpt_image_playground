@@ -62,7 +62,20 @@ export function EditorSizeSlider({
 }) {
   const ratio = Math.sqrt((value - min) / (max - min))
   const pad = 14
-  const keyAdjustingRef = useRef(false)
+  // 当前调节来源：拖动或按住方向键各算一次调节，调用方据此只记一条撤销；两者重叠时以先开始的为准
+  const adjustingRef = useRef<'pointer' | 'key' | null>(null)
+
+  const startAdjust = (kind: 'pointer' | 'key') => {
+    if (adjustingRef.current) return
+    adjustingRef.current = kind
+    onAdjustStart?.()
+  }
+
+  const endAdjust = (kind: 'pointer' | 'key') => {
+    if (adjustingRef.current !== kind) return
+    adjustingRef.current = null
+    onAdjustEnd?.()
+  }
 
   const updateFromPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect()
@@ -73,14 +86,7 @@ export function EditorSizeSlider({
   const finish = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
     event.currentTarget.releasePointerCapture(event.pointerId)
-    onAdjustEnd?.()
-  }
-
-  // 按住方向键连续调节视为一次调节，松开后才结束，调用方可以只记一条撤销
-  const finishKeyAdjust = () => {
-    if (!keyAdjustingRef.current) return
-    keyAdjustingRef.current = false
-    onAdjustEnd?.()
+    endAdjust('pointer')
   }
 
   return (
@@ -98,17 +104,16 @@ export function EditorSizeSlider({
           const step = e.key === 'ArrowUp' || e.key === 'ArrowRight' ? 1 : e.key === 'ArrowDown' || e.key === 'ArrowLeft' ? -1 : 0
           if (disabled || !step) return
           e.preventDefault()
-          if (!keyAdjustingRef.current) {
-            keyAdjustingRef.current = true
-            onAdjustStart?.()
-          }
+          startAdjust('key')
           onChange(Math.min(max, Math.max(min, value + step)))
         }}
-        onKeyUp={finishKeyAdjust}
-        onBlur={finishKeyAdjust}
+        onKeyUp={() => endAdjust('key')}
+        onBlur={() => endAdjust('key')}
+        // 点按滑块不抢焦点，画板输入文字时可以边打字边调字号
+        onMouseDown={(e) => e.preventDefault()}
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId)
-          onAdjustStart?.()
+          startAdjust('pointer')
           updateFromPointer(e)
         }}
         onPointerMove={(e) => {

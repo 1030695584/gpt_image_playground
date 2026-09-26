@@ -115,6 +115,13 @@ describe('transformElement', () => {
     const next = transformElement(text, { x: 100, y: 100, width: 40, height: 25 }, { x: 60, y: 50, width: 80, height: 50 }, 'nw')
     expect(next).toMatchObject({ x: 60, y: 75, fontSize: 40 })
   })
+
+  it('keeps scaled text within the font size range the slider can represent', () => {
+    const text: SketchTextElement = { id: 't', type: 'text', color: '#000', width: 4, x: 0, y: 0, text: 'hi', fontSize: 100 }
+    const from = { x: 0, y: 0, width: 200, height: 125 }
+    expect(transformElement(text, from, { x: 0, y: 0, width: 20000, height: 12500 }, 'se')).toMatchObject({ fontSize: 656 })
+    expect(transformElement(text, from, { x: 0, y: 0, width: 2, height: 1 }, 'se')).toMatchObject({ fontSize: 24 })
+  })
 })
 
 describe('moveElement', () => {

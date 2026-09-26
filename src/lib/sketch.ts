@@ -53,13 +53,16 @@ export const SKETCH_SHAPES: SketchShapeKind[] = ['line', 'arrow', 'rect', 'ellip
 export const SKETCH_HANDLES: SketchHandle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 export const SKETCH_FONT_FAMILY = 'system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif'
 export const SKETCH_LINE_HEIGHT = 1.25
+export const SKETCH_MIN_STROKE = 2
+export const SKETCH_MAX_STROKE = 160
 
+/** 文字字号与粗细滑块共用一个数值，字号范围随粗细范围确定 */
 export function getSketchFontSize(strokeWidth: number) {
   return Math.round(16 + strokeWidth * 4)
 }
 
 export function getSketchStrokeWidthFromFontSize(fontSize: number) {
-  return Math.max(1, Math.round((fontSize - 16) / 4))
+  return Math.round((fontSize - 16) / 4)
 }
 
 function getRawBounds(points: SketchPoint[]): SketchBounds {
@@ -250,9 +253,12 @@ export function moveElement(el: SketchElement, dx: number, dy: number): SketchEl
 /** 将元素从旧包围盒线性映射到新包围盒；退化方向（如水平线的高度）只平移 */
 export function transformElement(el: SketchElement, from: SketchBounds, to: SketchBounds, handle: SketchHandle): SketchElement {
   if (el.type === 'text') {
-    // 文字等比缩放，并固定被拖动控制点的对角
+    // 文字等比缩放，并固定被拖动控制点的对角；字号限制在滑块可表示的范围内
     const horizontal = handle === 'e' || handle === 'w'
-    const scale = Math.max(8 / el.fontSize, horizontal ? to.width / Math.max(1, from.width) : to.height / Math.max(1, from.height))
+    const raw = horizontal ? to.width / Math.max(1, from.width) : to.height / Math.max(1, from.height)
+    const minScale = getSketchFontSize(SKETCH_MIN_STROKE) / el.fontSize
+    const maxScale = getSketchFontSize(SKETCH_MAX_STROKE) / el.fontSize
+    const scale = Math.min(maxScale, Math.max(minScale, raw))
     const x = handle.includes('w') ? from.x + from.width * (1 - scale) : from.x
     const y = handle.includes('n') ? from.y + from.height * (1 - scale) : from.y
     const mapText = (p: SketchPoint) => ({ x: x + (p.x - from.x) * scale, y: y + (p.y - from.y) * scale })
@@ -286,10 +292,13 @@ export function drawSketchElement(ctx: CanvasRenderingContext2D, el: SketchEleme
 
   if (el.type === 'text') {
     ctx.font = `${el.fontSize}px ${SKETCH_FONT_FAMILY}`
-    // 文字在行高内垂直居中，与编辑框（CSS line-height）的显示保持一致
-    ctx.textBaseline = 'middle'
+    // 按 CSS 行框规则放置基线（字体上下边界在行高内居中），与编辑时的 textarea 完全重合；
+    // textBaseline = 'middle' 取的是 em 框中线，中文会整体偏上
     const lineHeight = el.fontSize * SKETCH_LINE_HEIGHT
-    el.text.split('\n').forEach((line, idx) => ctx.fillText(line, el.x, el.y + lineHeight / 2 + idx * lineHeight))
+    const metrics = ctx.measureText(el.text)
+    const ascent = metrics.fontBoundingBoxAscent
+    const baseline = (lineHeight - ascent - metrics.fontBoundingBoxDescent) / 2 + ascent
+    el.text.split('\n').forEach((line, idx) => ctx.fillText(line, el.x, el.y + baseline + idx * lineHeight))
     ctx.restore()
     return
   }
