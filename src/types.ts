@@ -104,6 +104,9 @@ export interface PresetConfig {
   agent?: PresetAgentConfig
 }
 
+/** 参考图预览中“编辑图片”按钮的默认行为 */
+export type ReferenceImageEditAction = 'ask' | 'sketch' | 'mask'
+
 export interface AppSettings {
   /** 旧版单配置字段：保留用于导入/查询参数兼容，实际请求以 active profile 为准 */
   baseUrl: string
@@ -124,6 +127,7 @@ export interface AppSettings {
   allowPromptRewrite: boolean
   taskCompletionNotification: boolean
   enterSubmit: boolean
+  referenceImageEditAction: ReferenceImageEditAction
   zipDownloadRoutes: ZipDownloadRoute[]
   agentScrollToBottomAfterSubmit: boolean
   agentMaxToolRounds: number

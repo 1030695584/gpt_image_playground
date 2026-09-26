@@ -269,6 +269,11 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
 
 // ===== Store 类型 =====
 
+interface SketchBoardRequest {
+  baseImageSrc: string | null
+  replaceImageId?: string
+}
+
 interface AppState {
   // 模式
   appMode: AppMode
@@ -385,6 +390,9 @@ interface AppState {
   lightboxImageId: string | null
   lightboxImageList: string[]
   setLightboxImageId: (id: string | null, list?: string[]) => void
+  /** 画板；baseImageSrc 为画布底图，replaceImageId 为完成后要替换的参考图 */
+  sketchBoard: SketchBoardRequest | null
+  setSketchBoard: (board: SketchBoardRequest | null) => void
   showSettings: boolean
   settingsTabRequest: SettingsTab | null
   setShowSettings: (v: boolean, tab?: SettingsTab) => void
@@ -977,6 +985,11 @@ export const useStore = create<AppState>()(
       setLightboxImageId: (lightboxImageId, list) => {
         if (lightboxImageId) dismissAllTooltips()
         set({ lightboxImageId, lightboxImageList: list ?? (lightboxImageId ? [lightboxImageId] : []) })
+      },
+      sketchBoard: null,
+      setSketchBoard: (sketchBoard) => {
+        if (sketchBoard) dismissAllTooltips()
+        set({ sketchBoard })
       },
       showSettings: false,
       settingsTabRequest: null,

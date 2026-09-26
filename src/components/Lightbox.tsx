@@ -1,12 +1,10 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { createInputImageFromFile, deleteImageIfUnreferenced, useStore } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
-import { useHintTooltip } from '../hooks/useHintTooltip'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { suppressGlobalClicks } from '../lib/clickSuppression'
 import { ensureImageCached, getCachedImage } from '../lib/imageCache'
-import ButtonTooltip from './input/buttonTooltip'
 import { EditIcon, RefreshIcon } from './icons'
 
 const MIN_SCALE = 1
@@ -31,6 +29,10 @@ export default function Lightbox() {
   const inputImages = useStore((s) => s.inputImages)
   const replaceInputImage = useStore((s) => s.replaceInputImage)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
+  const setSketchBoard = useStore((s) => s.setSketchBoard)
+  const setConfirmDialog = useStore((s) => s.setConfirmDialog)
+  const settings = useStore((s) => s.settings)
+  const setSettings = useStore((s) => s.setSettings)
   const showToast = useStore((s) => s.showToast)
   const replaceFileInputRef = useRef<HTMLInputElement>(null)
   const replaceImageTargetRef = useRef<string | null>(null)
@@ -188,11 +190,66 @@ export default function Lightbox() {
   }, [lightboxImageList, replaceInputImage, setLightboxImageId, showToast])
 
   const editInputImage = useCallback(() => {
-    if (!lightboxImageId || !isInputImage) return
+    if (!lightboxImageId || !isInputImage || !src) return
     const imageId = lightboxImageId
-    close()
-    setMaskEditorImageId(imageId)
-  }, [close, isInputImage, lightboxImageId, setMaskEditorImageId])
+    const baseImageSrc = src
+
+    // 已是遮罩主图时继续编辑遮罩
+    if (maskDraft?.targetImageId === imageId) {
+      close()
+      setMaskEditorImageId(imageId)
+      return
+    }
+
+    const openSketch = () => {
+      close()
+      setSketchBoard({ baseImageSrc, replaceImageId: imageId })
+    }
+    const openMask = () => {
+      if (useStore.getState().maskDraft) {
+        showToast('只能有一张遮罩图，请先移除现有遮罩', 'info')
+        return
+      }
+      close()
+      setMaskEditorImageId(imageId)
+    }
+    const remember = (choice: 'sketch' | 'mask', checked?: boolean) => {
+      if (checked) setSettings({ referenceImageEditAction: choice })
+    }
+
+    if (settings.referenceImageEditAction === 'sketch') {
+      openSketch()
+      return
+    }
+    if (settings.referenceImageEditAction === 'mask') {
+      openMask()
+      return
+    }
+
+    setConfirmDialog({
+      title: '编辑图片',
+      message: '画板可在图片上手绘、评论，标注修改意图；遮罩可指定需要重绘的区域。\n若勾选下方选项，之后可在 **设置-习惯配置** 中修改。',
+      checkbox: { label: '以后默认执行此选择' },
+      buttons: [
+        {
+          label: '遮罩',
+          tone: 'secondary',
+          action: (checked) => {
+            remember('mask', checked)
+            openMask()
+          },
+        },
+        {
+          label: '画板',
+          tone: 'primary',
+          action: (checked) => {
+            remember('sketch', checked)
+            openSketch()
+          },
+        },
+      ],
+    })
+  }, [close, isInputImage, lightboxImageId, maskDraft?.targetImageId, setConfirmDialog, setMaskEditorImageId, setSettings, setSketchBoard, settings.referenceImageEditAction, showToast, src])
 
   // 键盘左右切换
   useEffect(() => {
@@ -220,7 +277,6 @@ export default function Lightbox() {
         onPrev={goPrev}
         onNext={goNext}
         showInputActions={isInputImage}
-        editDisabled={Boolean(maskDraft && maskDraft.targetImageId !== lightboxImageId)}
         onReplace={openReplaceFilePicker}
         onEdit={editInputImage}
       />
@@ -246,16 +302,14 @@ interface LightboxInnerProps {
   onPrev: () => void
   onNext: () => void
   showInputActions: boolean
-  editDisabled: boolean
   onReplace: () => void
   onEdit: () => void
 }
 
 /** 内部组件：保证挂载时 DOM 已经存在，所有 ref / effect 都可靠 */
-function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, currentIndex, total, onPrev, onNext, showInputActions, editDisabled, onReplace, onEdit }: LightboxInnerProps) {
+function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, currentIndex, total, onPrev, onNext, showInputActions, onReplace, onEdit }: LightboxInnerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const openedAtRef = useRef(Date.now())
-  const editHint = useHintTooltip({ enabled: () => editDisabled })
 
   // 用 ref 追踪最新变换，避免闭包过期
   const scaleRef = useRef(1)
@@ -755,25 +809,14 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
             <RefreshIcon className="w-4 h-4" />
             <span>替换图片</span>
           </button>
-          <div
-            className="relative flex items-center"
-            onMouseEnter={editHint.show}
-            onMouseLeave={editHint.hide}
-            onTouchStart={editHint.startTouch}
-            onTouchEnd={editHint.clearTimer}
-            onTouchCancel={editHint.hide}
+          <button
+            type="button"
+            className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-blue-500 px-5 py-2.5 text-sm font-medium text-white shadow-md transition hover:bg-blue-600 hover:shadow-blue-500/25 active:scale-95"
+            onClick={onEdit}
           >
-            <ButtonTooltip visible={editDisabled && editHint.visible} text="只能有一张遮罩图" />
-            <button
-              type="button"
-              disabled={editDisabled}
-              className={`flex items-center justify-center gap-2 whitespace-nowrap rounded-xl px-5 py-2.5 text-sm font-medium shadow-md transition active:scale-95 ${editDisabled ? 'cursor-not-allowed bg-gray-100 text-gray-400 dark:bg-white/10 dark:text-white/40 shadow-none' : 'bg-blue-500 text-white hover:bg-blue-600 hover:shadow-blue-500/25'}`}
-              onClick={onEdit}
-            >
-              <EditIcon className="w-4 h-4" />
-              <span>编辑图片</span>
-            </button>
-          </div>
+            <EditIcon className="w-4 h-4" />
+            <span>编辑图片</span>
+          </button>
         </div>
       )}
 

@@ -4,7 +4,7 @@ import { canCopyImageToClipboard, copyImageSourceToClipboard, getClipboardFailur
 import { downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getImageZipEntries } from '../lib/downloadImages'
 import { suppressGlobalClicks } from '../lib/clickSuppression'
 import { ensureImageCached } from '../lib/imageCache'
-import { CopyIcon, DownloadIcon, EditIcon } from './icons'
+import { CopyIcon, DownloadIcon, EditIcon, SketchIcon } from './icons'
 
 export default function ImageContextMenu() {
   const [menuInfo, setMenuInfo] = useState<{ src: string; imageId?: string; outputImageIds: string[]; canCopyImage: boolean; x: number; y: number } | null>(null)
@@ -13,6 +13,7 @@ export default function ImageContextMenu() {
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
+  const setSketchBoard = useStore((s) => s.setSketchBoard)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -190,12 +191,32 @@ export default function ImageContextMenu() {
     }
   }
 
+  const handleSketch = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setMenuInfo(null)
+    if (inputImages.length >= 16) {
+      showToast('参考图数量已达上限（16 张），无法继续添加', 'error')
+      return
+    }
+
+    try {
+      const src = await getOriginalImageSrc()
+      setDetailTaskId(null)
+      setLightboxImageId(null)
+      setMaskEditorImageId(null)
+      setSketchBoard({ baseImageSrc: src })
+    } catch (err) {
+      console.error(err)
+      showToast(`打开画板失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+    }
+  }
+
   // 保证菜单在视口内
   let left = menuInfo.x
   let top = menuInfo.y
   const MENU_WIDTH = 120
   const showDownloadAll = menuInfo.outputImageIds.length > 1
-  const menuItemCount = (menuInfo.canCopyImage ? 1 : 0) + 1 + (showDownloadAll ? 1 : 0) + 1
+  const menuItemCount = (menuInfo.canCopyImage ? 1 : 0) + 1 + (showDownloadAll ? 1 : 0) + 2
   const MENU_HEIGHT = menuItemCount * 32 + 32
 
   if (left + MENU_WIDTH > window.innerWidth) {
@@ -243,6 +264,13 @@ export default function ImageContextMenu() {
       >
         <EditIcon className="w-4 h-4 flex-shrink-0" />
         编辑
+      </button>
+      <button
+        onClick={handleSketch}
+        className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
+      >
+        <SketchIcon className="w-4 h-4 flex-shrink-0" />
+        画板标注
       </button>
     </div>
   )
