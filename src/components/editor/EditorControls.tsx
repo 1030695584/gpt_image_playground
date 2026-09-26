@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import type { PointerEvent as ReactPointerEvent, ReactNode, SVGProps } from 'react'
 import { TooltipButton } from '../TooltipButton'
 
@@ -61,6 +62,7 @@ export function EditorSizeSlider({
 }) {
   const ratio = Math.sqrt((value - min) / (max - min))
   const pad = 14
+  const keyAdjustingRef = useRef(false)
 
   const updateFromPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect()
@@ -71,6 +73,13 @@ export function EditorSizeSlider({
   const finish = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
     event.currentTarget.releasePointerCapture(event.pointerId)
+    onAdjustEnd?.()
+  }
+
+  // 按住方向键连续调节视为一次调节，松开后才结束，调用方可以只记一条撤销
+  const finishKeyAdjust = () => {
+    if (!keyAdjustingRef.current) return
+    keyAdjustingRef.current = false
     onAdjustEnd?.()
   }
 
@@ -86,10 +95,17 @@ export function EditorSizeSlider({
         aria-disabled={disabled}
         tabIndex={disabled ? -1 : 0}
         onKeyDown={(e) => {
-          if (disabled) return
-          if (e.key === 'ArrowUp' || e.key === 'ArrowRight') onChange(Math.min(max, value + 1))
-          if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') onChange(Math.max(min, value - 1))
+          const step = e.key === 'ArrowUp' || e.key === 'ArrowRight' ? 1 : e.key === 'ArrowDown' || e.key === 'ArrowLeft' ? -1 : 0
+          if (disabled || !step) return
+          e.preventDefault()
+          if (!keyAdjustingRef.current) {
+            keyAdjustingRef.current = true
+            onAdjustStart?.()
+          }
+          onChange(Math.min(max, Math.max(min, value + step)))
         }}
+        onKeyUp={finishKeyAdjust}
+        onBlur={finishKeyAdjust}
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId)
           onAdjustStart?.()

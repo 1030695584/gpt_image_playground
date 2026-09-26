@@ -152,6 +152,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
   const showToast = useStore((s) => s.showToast)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const overlayRef = useRef<HTMLCanvasElement>(null)
   const frameRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -304,6 +305,13 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     const ctx = canvasRef.current!.getContext('2d')!
     const visible = elements.filter((el) => el.id !== editingText?.id)
     drawScene(ctx, draft ? [...visible, draft] : visible, liveErase)
+  }, [elements, draft, liveErase, editingText, baseImage, docSize])
+
+  // 选中框单独画在叠加层上，缩放时只需重绘这一层
+  useEffect(() => {
+    if (!docSize) return
+    const ctx = overlayRef.current!.getContext('2d')!
+    ctx.clearRect(0, 0, docSize.width, docSize.height)
     if (!selected || editingText) return
 
     const unit = 1 / viewScale
@@ -332,7 +340,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
       ctx.strokeRect(p.x - size / 2, p.y - size / 2, size, size)
     }
     ctx.restore()
-  }, [elements, draft, liveErase, selected, editingText, viewScale, baseImage, docSize])
+  }, [selected, editingText, viewScale, docSize])
 
   function syncHistory() {
     setHistoryVersion((v) => v + 1)
@@ -689,7 +697,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     if (before) pushHistory(before)
   }
 
-  // commitCustomColor 只读写 ref，注册一次即可
+  // commitCustomColor 只依赖 ref 和稳定的 setter，注册一次即可
   useEffect(() => {
     const input = colorInputRef.current!
     input.addEventListener('change', commitCustomColor)
@@ -703,16 +711,15 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     }
   }
 
+  // 只在滑块调节期间调用，松手或松开按键后由 onAdjustEnd 统一记一条历史
   const applyStrokeWidth = (next: number) => {
+    if (next === strokeWidth) return
     setStrokeWidth(next)
     if (!selected) return
-    const items = elements.map((el) => {
+    setElements((items) => items.map((el) => {
       if (el.id !== selected.id) return el
       return el.type === 'text' ? { ...el, width: next, fontSize: getSketchFontSize(next) } : { ...el, width: next }
-    })
-    // 拖动滑块时在松手后统一记一条历史，键盘调节则每次单独记录
-    if (widthBeforeRef.current) setElements(items)
-    else commit(items)
+    }))
   }
 
   const selectTool = (next: SketchTool) => {
@@ -899,6 +906,12 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
                     width={docSize.width}
                     height={docSize.height}
                     className="absolute inset-0 h-full w-full"
+                  />
+                  <canvas
+                    ref={overlayRef}
+                    width={docSize.width}
+                    height={docSize.height}
+                    className="pointer-events-none absolute inset-0 h-full w-full"
                   />
                 </div>
                 {editingText && (

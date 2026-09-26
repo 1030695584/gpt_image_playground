@@ -11,6 +11,7 @@ import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, 
 import { normalizeCodexCliImageSize, normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { getSafeBoundingClientRect } from '../lib/domRect'
+import { suppressGlobalClicks } from '../lib/clickSuppression'
 import { collectAgentRoundOutputImageSlots } from '../lib/agentImageReferences'
 import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds } from '../lib/favoriteState'
 import { getContentEditableCursor, getContentEditablePlainText, getContentEditableSelection, getMentionTagHtml, setContentEditableCursor, setContentEditableSelection, syncMentionTagSelection } from '../lib/contentEditableMentions'
@@ -22,8 +23,6 @@ import ButtonTooltip from './input/buttonTooltip'
 import DragUploadOverlay from './input/dragUploadOverlay'
 import InputBatchBars from './input/inputBatchBars'
 import InputParamsPanel from './input/inputParamsPanel'
-
-/** API 支持的最大参考图数量 */
 
 function getFavoriteCollectionTasksForBatch(collectionId: string, tasks: TaskRecord[], defaultFavoriteCollectionId: string | null) {
   const favoriteTasks = tasks.filter((task) => task.isFavorite)
@@ -1125,15 +1124,21 @@ export default function InputBar() {
     return () => document.removeEventListener('selectionchange', handleSelectionChange)
   }, [])
 
-  // 输入栏卡片带 backdrop-blur，fixed 遮罩只能覆盖卡片内部，因此改为监听全局按下来关闭菜单
+  // 输入栏卡片带 backdrop-blur，fixed 遮罩只能覆盖卡片内部，因此改为监听全局按下来关闭菜单，
+  // 并吞掉随后的点击，避免关闭菜单时误触发外部按钮
   useEffect(() => {
     if (!showUploadMenu) return
-    const closeMenu = (event: PointerEvent) => {
-      if ((event.target as Element).closest('[data-add-image-menu]')) return
+    const closeMenu = (event: Event) => {
+      if (event.target instanceof Element && event.target.closest('[data-add-image-menu]')) return
+      suppressGlobalClicks()
       setShowUploadMenu(false)
     }
-    document.addEventListener('pointerdown', closeMenu, true)
-    return () => document.removeEventListener('pointerdown', closeMenu, true)
+    window.addEventListener('mousedown', closeMenu, { capture: true })
+    window.addEventListener('touchstart', closeMenu, { capture: true })
+    return () => {
+      window.removeEventListener('mousedown', closeMenu, { capture: true })
+      window.removeEventListener('touchstart', closeMenu, { capture: true })
+    }
   }, [showUploadMenu])
 
   // 点击外部时使 input 栏失焦

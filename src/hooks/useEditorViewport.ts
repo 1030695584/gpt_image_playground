@@ -197,8 +197,7 @@ export function useEditorViewport(
     /** 是否处于双指手势中（包括刚抬起一根手指的余下阶段） */
     isPinching: () => pinchRef.current != null,
     /** 可见区域中心对应的内容坐标（contentScale 为内容像素与布局框像素之比） */
-    getVisibleCenter: (contentScale: number): Point | null => {
-      if (contentScale <= 0) return null
+    getVisibleCenter: (contentScale: number): Point => {
       const b = getBounds()
       const t = transformRef.current
       return {

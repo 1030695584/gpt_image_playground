@@ -304,7 +304,9 @@ function MaskEditor({ imageId }: { imageId: string }) {
             'info',
           )
         }
-        requestAnimationFrame(() => resetViewTransform())
+        requestAnimationFrame(() => {
+          if (!cancelled) resetViewTransform()
+        })
       } catch (err) {
         if (!cancelled) {
           showToast(err instanceof Error ? err.message : String(err), 'error')
@@ -522,7 +524,7 @@ function MaskEditor({ imageId }: { imageId: string }) {
               <canvas ref={previewCanvasRef} className="absolute inset-0 h-full w-full" />
               <canvas ref={maskCanvasRef} className="absolute inset-0 h-full w-full opacity-0" />
             </div>
-            {brushPoint && viewScale > 0 && (
+            {brushPoint && (
               <BrushCursor
                 x={brushPoint.x * viewScale + viewport.transform.x}
                 y={brushPoint.y * viewScale + viewport.transform.y}
