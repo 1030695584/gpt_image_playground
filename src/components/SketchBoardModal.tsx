@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { flushSync } from 'react-dom'
+import { MAX_INPUT_IMAGES, type SketchBoardRequest } from '../types'
 import { useStore } from '../store'
 import { canvasToBlob, loadImage } from '../lib/canvasImage'
 import { blobToDataUrl } from '../lib/dataUrl'
@@ -10,6 +11,7 @@ import {
   SKETCH_FONT_FAMILY,
   SKETCH_HANDLES,
   SKETCH_LINE_HEIGHT,
+  SKETCH_LONG_EDGE,
   SKETCH_SHAPES,
   drawEraseStroke,
   drawSketchElementWithErase,
@@ -50,13 +52,13 @@ import {
   CheckIcon,
   ClearIcon,
   EDITOR_ICON_BUTTON_CLASS,
+  EditorResetViewButton,
   EditorShell,
   EditorSizeSlider,
   EditorTopBar,
   EraserIcon,
   PenIcon,
   RedoIcon,
-  ResetViewIcon,
   UndoIcon,
   getEditorToolButtonClass,
 } from './editor/EditorControls'
@@ -98,7 +100,6 @@ const PALETTE = [
 const MIN_STROKE = 2
 const MAX_STROKE = 160
 const MAX_HISTORY = 100
-const MAX_INPUT_IMAGES = 16
 const HANDLE_CURSORS: Record<SketchHandle, string> = {
   nw: 'nwse-resize',
   se: 'nwse-resize',
@@ -145,11 +146,10 @@ export default function SketchBoardModal() {
   return <SketchBoardEditor baseImageSrc={board.baseImageSrc} replaceImageId={board.replaceImageId} />
 }
 
-function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: string | null; replaceImageId?: string }) {
+function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest) {
   const setSketchBoard = useStore((s) => s.setSketchBoard)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const showToast = useStore((s) => s.showToast)
-  const sizeParam = useStore((s) => s.params.size)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const frameRef = useRef<HTMLDivElement>(null)
@@ -164,16 +164,19 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
   const widthBeforeRef = useRef<SketchElement[] | null>(null)
   const colorBeforeRef = useRef<SketchElement[] | null>(null)
   const colorInputRef = useRef<HTMLInputElement>(null)
-  // 离屏画布：笔画层与单个元素擦除用的临时层，底图不参与擦除
+  // 离屏画布：笔画层、单个元素擦除用的临时层（底图不参与擦除），以及判断擦除后是否还有像素的探测层
   const [inkCanvas] = useState(() => document.createElement('canvas'))
   const [scratchCanvas] = useState(() => document.createElement('canvas'))
+  const [probeCanvas] = useState(() => document.createElement('canvas'))
+  // 文字测量不依赖具体画布，复用临时层的上下文
+  const measureCtx = scratchCanvas.getContext('2d')!
 
   // 画板背景跟随打开时的系统主题，导出的草图保持所见即所得
   const [isDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   const inkColor = isDark ? '#ffffff' : '#18181b'
   const paperColor = isDark ? '#232326' : '#ffffff'
 
-  const [docSize, setDocSize] = useState(() => baseImageSrc ? null : getSketchCanvasSize(sizeParam))
+  const [docSize, setDocSize] = useState(() => baseImageSrc ? null : getSketchCanvasSize(useStore.getState().params.size))
   const [baseImage, setBaseImage] = useState<HTMLImageElement | null>(null)
   const [elements, setElements] = useState<SketchElement[]>([])
   const [draft, setDraft] = useState<SketchElement | null>(null)
@@ -188,7 +191,6 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [editingText, setEditingText] = useState<SketchTextElement | null>(null)
   const [showShapeMenu, setShowShapeMenu] = useState(false)
-  const [cssScale, setCssScale] = useState(1)
   const [hoverPoint, setHoverPoint] = useState<SketchPoint | null>(null)
   const [hoverCursor, setHoverCursor] = useState('default')
   const [isAdjustingWidth, setIsAdjustingWidth] = useState(false)
@@ -197,6 +199,8 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
   const viewport = useEditorViewport(frameRef, viewRef, Boolean(docSize))
   const customColorTooltip = useTooltip()
   editingRef.current = editingText
+  // 布局像素与文档像素之比（未含缩放）
+  const cssScale = docSize ? viewport.frameWidth / docSize.width : 0
   // 屏幕像素与文档像素的换算比例，包含缩放
   const viewScale = cssScale * viewport.transform.scale
   const isReady = Boolean(docSize)
@@ -238,7 +242,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
     loadImage(baseImageSrc)
       .then((image) => {
         if (cancelled) return
-        const scale = 1536 / Math.max(image.naturalWidth, image.naturalHeight)
+        const scale = SKETCH_LONG_EDGE / Math.max(image.naturalWidth, image.naturalHeight)
         setBaseImage(image)
         setDocSize({ width: Math.round(image.naturalWidth * scale), height: Math.round(image.naturalHeight * scale) })
       })
@@ -252,16 +256,6 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
     }
   }, [baseImageSrc, setSketchBoard, showToast])
 
-  useLayoutEffect(() => {
-    const frame = frameRef.current
-    if (!frame || !docSize) return
-    const update = () => setCssScale(frame.clientWidth / docSize.width || 1)
-    update()
-    const observer = new ResizeObserver(update)
-    observer.observe(frame)
-    return () => observer.disconnect()
-  }, [docSize])
-
   useEffect(() => {
     if (!showShapeMenu) return
     const closeMenu = (event: PointerEvent) => {
@@ -273,44 +267,41 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
   }, [showShapeMenu])
 
   function drawScene(ctx: CanvasRenderingContext2D, items: SketchElement[], erase?: SketchEraseStroke | null) {
-    if (!docSize) return
-    if (inkCanvas.width !== docSize.width || inkCanvas.height !== docSize.height) {
-      inkCanvas.width = docSize.width
-      inkCanvas.height = docSize.height
+    const size = docSize!
+    if (inkCanvas.width !== size.width || inkCanvas.height !== size.height) {
+      inkCanvas.width = size.width
+      inkCanvas.height = size.height
     }
-    const inkCtx = inkCanvas.getContext('2d')
-    if (!inkCtx) return
-    inkCtx.clearRect(0, 0, docSize.width, docSize.height)
+    const inkCtx = inkCanvas.getContext('2d')!
+    inkCtx.clearRect(0, 0, size.width, size.height)
     for (const el of items) drawSketchElementWithErase(inkCtx, el, scratchCanvas)
     if (erase) drawEraseStroke(inkCtx, erase)
 
-    ctx.clearRect(0, 0, docSize.width, docSize.height)
+    ctx.clearRect(0, 0, size.width, size.height)
     ctx.fillStyle = paperColor
-    ctx.fillRect(0, 0, docSize.width, docSize.height)
-    if (baseImage) ctx.drawImage(baseImage, 0, 0, docSize.width, docSize.height)
+    ctx.fillRect(0, 0, size.width, size.height)
+    if (baseImage) ctx.drawImage(baseImage, 0, 0, size.width, size.height)
     ctx.drawImage(inkCanvas, 0, 0)
   }
 
-  function getSelectionBox(el: SketchElement, ctx: CanvasRenderingContext2D) {
-    const b = getElementBounds(el, ctx)
+  function getSelectionBox(el: SketchElement) {
+    const b = getElementBounds(el, measureCtx)
     const pad = 6 / viewScale
     return { x: b.x - pad, y: b.y - pad, width: b.width + pad * 2, height: b.height + pad * 2 }
   }
 
   /** 直线和箭头只显示两端控制点，其余元素显示包围盒的 8 个控制点 */
-  function getHandleAt(el: SketchElement, point: SketchPoint, ctx: CanvasRenderingContext2D): SketchHandle | EndpointHandle | null {
+  function getHandleAt(el: SketchElement, point: SketchPoint): SketchHandle | EndpointHandle | null {
     const reach = 10 / viewScale
     const near = (p: SketchPoint) => Math.abs(p.x - point.x) <= reach && Math.abs(p.y - point.y) <= reach
     if (isLineShape(el)) return near(el.end) ? 'end' : near(el.start) ? 'start' : null
-    const box = getSelectionBox(el, ctx)
+    const box = getSelectionBox(el)
     return SKETCH_HANDLES.find((handle) => near(getHandlePoint(box, handle))) ?? null
   }
 
   useEffect(() => {
-    const canvas = canvasRef.current
-    const ctx = canvas?.getContext('2d')
-    if (!canvas || !ctx || !docSize) return
-
+    if (!docSize) return
+    const ctx = canvasRef.current!.getContext('2d')!
     const visible = elements.filter((el) => el.id !== editingText?.id)
     drawScene(ctx, draft ? [...visible, draft] : visible, liveErase)
     if (!selected || editingText) return
@@ -331,7 +322,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
       ctx.restore()
       return
     }
-    const box = getSelectionBox(selected, ctx)
+    const box = getSelectionBox(selected)
     ctx.setLineDash([6 * unit, 4 * unit])
     ctx.strokeRect(box.x, box.y, box.width, box.height)
     ctx.setLineDash([])
@@ -341,7 +332,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
       ctx.strokeRect(p.x - size / 2, p.y - size / 2, size, size)
     }
     ctx.restore()
-  })
+  }, [elements, draft, liveErase, selected, editingText, viewScale, baseImage, docSize])
 
   function syncHistory() {
     setHistoryVersion((v) => v + 1)
@@ -411,7 +402,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  })
+  }, [elements, selectedId, isSaving])
 
   function toDocPoint(event: { clientX: number; clientY: number }): SketchPoint {
     const rect = canvasRef.current!.getBoundingClientRect()
@@ -470,25 +461,24 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
   }
 
   /** 把擦除笔迹挂到所有被擦到的元素上，完全擦掉的元素直接移除 */
-  function applyErase(stroke: SketchEraseStroke, ctx: CanvasRenderingContext2D) {
+  function applyErase(stroke: SketchEraseStroke) {
     let changed = false
     const next: SketchElement[] = []
     for (const el of elements) {
-      const touched = stroke.points.some((p) => hitTestElement(el, p, stroke.width / 2, ctx, 'erase'))
+      const touched = stroke.points.some((p) => hitTestElement(el, p, stroke.width / 2, measureCtx, 'erase'))
       if (!touched) {
         next.push(el)
         continue
       }
       changed = true
       const erased = { ...el, erase: [...(el.erase ?? []), stroke] }
-      if (isSketchElementVisible(erased, scratchCanvas)) next.push(erased)
+      if (isSketchElementVisible(erased, probeCanvas)) next.push(erased)
     }
     if (changed) commit(next)
   }
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const ctx = canvasRef.current?.getContext('2d')
-    if (!ctx || !docSize || isSaving || (event.pointerType !== 'touch' && event.button !== 0)) return
+    if (!docSize || isSaving || (event.pointerType !== 'touch' && event.button !== 0)) return
     if (event.target === textareaRef.current) return
     if (editingRef.current) {
       textareaRef.current?.blur()
@@ -511,7 +501,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
 
     if (tool === 'text') {
       if (point.x < 0 || point.y < 0 || point.x > docSize.width || point.y > docSize.height) return
-      const hit = findTopElementAt(elements.filter((el) => el.type === 'text'), point, tolerance, ctx)
+      const hit = findTopElementAt(elements.filter((el) => el.type === 'text'), point, tolerance, measureCtx)
       const fontSize = getSketchFontSize(strokeWidth)
       startEditing(hit?.type === 'text' ? hit : {
         id: createId(),
@@ -544,14 +534,14 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
       return
     }
 
-    const handle = selected ? getHandleAt(selected, point, ctx) : null
+    const handle = selected ? getHandleAt(selected, point) : null
     if (selected && handle) {
       if (handle === 'start' || handle === 'end') {
         if (isLineShape(selected)) gestureRef.current = { kind: 'endpoint', pointerId, before: elements, target: selected, handle }
         return
       }
-      const box = getSelectionBox(selected, ctx)
-      const from = getTransformBounds(selected, ctx)
+      const box = getSelectionBox(selected)
+      const from = getTransformBounds(selected, measureCtx)
       const boxHandle = getHandlePoint(box, handle)
       const fromHandle = getHandlePoint(from, handle)
       gestureRef.current = {
@@ -566,24 +556,22 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
       return
     }
 
-    const hit = findTopElementAt(elements, point, tolerance, ctx)
+    const hit = findTopElementAt(elements, point, tolerance, measureCtx)
     selectElement(hit)
     if (hit) gestureRef.current = { kind: 'move', pointerId, before: elements, start: point, targetId: hit.id }
   }
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const ctx = canvasRef.current?.getContext('2d')
-    if (!ctx || !docSize) return
-    if (viewport.pointerMove(event)) return
+    if (!docSize || viewport.pointerMove(event)) return
     const point = toDocPoint(event)
     if (event.pointerType !== 'touch') setHoverPoint(point)
 
     const gesture = gestureRef.current
     if (!gesture) {
       if (tool !== 'select') return
-      const handle = selected ? getHandleAt(selected, point, ctx) : null
+      const handle = selected ? getHandleAt(selected, point) : null
       const handleCursor = handle === 'start' || handle === 'end' ? 'crosshair' : handle ? HANDLE_CURSORS[handle] : null
-      setHoverCursor(handleCursor ?? (findTopElementAt(elements, point, 6 / viewScale, ctx) ? 'move' : 'default'))
+      setHoverCursor(handleCursor ?? (findTopElementAt(elements, point, 6 / viewScale, measureCtx) ? 'move' : 'default'))
       return
     }
     if (gesture.pointerId !== event.pointerId) return
@@ -663,8 +651,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
       return
     }
     if (gesture.kind === 'erase') {
-      const ctx = canvasRef.current?.getContext('2d')
-      if (ctx) applyErase(gesture.stroke, ctx)
+      applyErase(gesture.stroke)
       setLiveErase(null)
       return
     }
@@ -682,9 +669,8 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
   }
 
   const handleDoubleClick = (event: ReactMouseEvent<HTMLDivElement>) => {
-    const ctx = canvasRef.current?.getContext('2d')
-    if (!ctx || !docSize || tool !== 'select') return
-    const hit = findTopElementAt(elements, toDocPoint(event), 6 / viewScale, ctx)
+    if (!docSize || tool !== 'select') return
+    const hit = findTopElementAt(elements, toDocPoint(event), 6 / viewScale, measureCtx)
     if (hit?.type === 'text') startEditing(hit)
   }
 
@@ -703,12 +689,12 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
     if (before) pushHistory(before)
   }
 
+  // commitCustomColor 只读写 ref，注册一次即可
   useEffect(() => {
-    const input = colorInputRef.current
-    if (!input) return
+    const input = colorInputRef.current!
     input.addEventListener('change', commitCustomColor)
     return () => input.removeEventListener('change', commitCustomColor)
-  })
+  }, [])
 
   const applyColor = (next: string) => {
     setColor(next)
@@ -720,10 +706,13 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
   const applyStrokeWidth = (next: number) => {
     setStrokeWidth(next)
     if (!selected) return
-    setElements((items) => items.map((el) => {
+    const items = elements.map((el) => {
       if (el.id !== selected.id) return el
       return el.type === 'text' ? { ...el, width: next, fontSize: getSketchFontSize(next) } : { ...el, width: next }
-    }))
+    })
+    // 拖动滑块时在松手后统一记一条历史，键盘调节则每次单独记录
+    if (widthBeforeRef.current) setElements(items)
+    else commit(items)
   }
 
   const selectTool = (next: SketchTool) => {
@@ -747,9 +736,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
       const canvas = document.createElement('canvas')
       canvas.width = docSize.width
       canvas.height = docSize.height
-      const ctx = canvas.getContext('2d')
-      if (!ctx) throw new Error('当前浏览器不支持 Canvas')
-      drawScene(ctx, elements)
+      drawScene(canvas.getContext('2d')!, elements)
       const dataUrl = await blobToDataUrl(await canvasToBlob(canvas, 'image/png'))
       const id = await storeImage(dataUrl, 'upload')
       cacheImage(id, dataUrl)
@@ -785,8 +772,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
     ? 'text'
     : brushRingPoint ? 'none' : 'crosshair'
 
-  const editingCtx = editingText ? canvasRef.current?.getContext('2d') : null
-  const editingSize = editingText && editingCtx ? measureTextElement(editingCtx, editingText) : null
+  const editingSize = editingText ? measureTextElement(measureCtx, editingText) : null
   const swatchClass = (active: boolean) => `h-7 w-7 flex-none rounded-full transition-transform hover:scale-110 ${
     active ? 'ring-2 ring-blue-500 ring-offset-2 ring-offset-white dark:ring-offset-gray-900' : 'ring-1 ring-inset ring-black/10 dark:ring-white/15'
   }`
@@ -977,16 +963,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: { baseImageSrc: str
           }}
         />
 
-        {viewport.isZoomed && (
-          <TooltipButton
-            tooltip="重置视图"
-            wrapperClassName="absolute bottom-3 right-3 z-10 inline-flex"
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-gray-200/80 bg-white/95 text-gray-600 shadow-sm transition hover:text-gray-900 dark:border-white/[0.08] dark:bg-gray-800/95 dark:text-gray-300 dark:hover:text-white"
-            onClick={() => viewport.reset()}
-          >
-            <ResetViewIcon />
-          </TooltipButton>
-        )}
+        {viewport.isZoomed && <EditorResetViewButton onClick={() => viewport.commit()} />}
       </div>
 
       {/* 底部颜色与确认 */}

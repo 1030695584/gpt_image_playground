@@ -18,13 +18,13 @@ import {
   CheckIcon,
   ClearIcon,
   EDITOR_ICON_BUTTON_CLASS,
+  EditorResetViewButton,
   EditorShell,
   EditorSizeSlider,
   EditorTopBar,
   EraserIcon,
   PenIcon,
   RedoIcon,
-  ResetViewIcon,
   UndoIcon,
   getEditorToolButtonClass,
 } from './editor/EditorControls'
@@ -71,6 +71,12 @@ function drawMaskImageToCanvas(maskImage: HTMLImageElement, maskCanvas: HTMLCanv
 
 export default function MaskEditorModal() {
   const imageId = useStore((s) => s.maskEditorImageId)
+  if (!imageId) return null
+  // 以图片 id 作为 key，每次打开都是全新的编辑状态
+  return <MaskEditor key={imageId} imageId={imageId} />
+}
+
+function MaskEditor({ imageId }: { imageId: string }) {
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
   const maskDraft = useStore((s) => s.maskDraft)
   const setMaskDraft = useStore((s) => s.setMaskDraft)
@@ -90,8 +96,6 @@ export default function MaskEditorModal() {
   const redoStackRef = useRef<ImageData[]>([])
   const previewFrameRef = useRef<number | null>(null)
   const saveTokenRef = useRef(0)
-  const sessionIdRef = useRef(0)
-  const activeSessionIdRef = useRef(0)
 
   const [sourceDataUrl, setSourceDataUrl] = useState('')
   const [size, setSize] = useState<CanvasSize | null>(null)
@@ -102,7 +106,6 @@ export default function MaskEditorModal() {
   const [historyState, setHistoryState] = useState({ undo: 0, redo: 0 })
   const [hoverPoint, setHoverPoint] = useState<Point | null>(null)
   const [isAdjustingSize, setIsAdjustingSize] = useState(false)
-  const [frameWidth, setFrameWidth] = useState(0)
 
   const viewport = useEditorViewport(baseFrameRef, viewRef, Boolean(size))
   const infoTooltip = useTooltip()
@@ -111,8 +114,8 @@ export default function MaskEditorModal() {
     if (isSaving) return
     setMaskEditorImageId(null)
   }
-  useCloseOnEscape(Boolean(imageId), close)
-  usePreventBackgroundScroll(Boolean(imageId))
+  useCloseOnEscape(true, close)
+  usePreventBackgroundScroll(true)
 
   const handleRemoveMask = () => {
     setConfirmDialog({
@@ -128,13 +131,9 @@ export default function MaskEditorModal() {
   }
 
   function resetViewTransform() {
-    const frame = baseFrameRef.current
-    const stage = stageRef.current
-    if (!frame || !stage) {
-      viewport.reset()
-      return
-    }
-    viewport.reset(getComfortableInitialTransform(
+    const frame = baseFrameRef.current!
+    const stage = stageRef.current!
+    viewport.commit(getComfortableInitialTransform(
       { width: frame.clientWidth, height: frame.clientHeight },
       { width: stage.clientWidth, height: stage.clientHeight },
       window.matchMedia('(max-width: 1023px)').matches,
@@ -236,40 +235,12 @@ export default function MaskEditorModal() {
     renderPreview()
   }
 
-  useEffect(() => {
-    if (!imageId) {
-      activeSessionIdRef.current = 0
-      return
-    }
-
-    const nextSessionId = sessionIdRef.current + 1
-    sessionIdRef.current = nextSessionId
-    activeSessionIdRef.current = nextSessionId
-
-    return () => {
-      if (activeSessionIdRef.current === nextSessionId) {
-        activeSessionIdRef.current = 0
-      }
-    }
-  }, [imageId])
+  // 关闭后丢弃仍在进行的保存结果
+  useEffect(() => () => {
+    saveTokenRef.current++
+  }, [])
 
   useEffect(() => {
-    if (!imageId) {
-      if (previewFrameRef.current != null) {
-        window.cancelAnimationFrame(previewFrameRef.current)
-        previewFrameRef.current = null
-      }
-      setSourceDataUrl('')
-      setSize(null)
-      setIsLoading(false)
-      viewport.reset()
-      undoStackRef.current = []
-      redoStackRef.current = []
-      syncHistoryState()
-      return
-    }
-
-    const targetImageId = imageId
     let cancelled = false
     setIsLoading(true)
     setSourceDataUrl('')
@@ -280,7 +251,7 @@ export default function MaskEditorModal() {
 
     async function loadCanvases() {
       try {
-        const dataUrl = await ensureImageCached(targetImageId)
+        const dataUrl = await ensureImageCached(imageId)
         if (cancelled) return
         if (!dataUrl) {
           showToast('图片已不存在，无法编辑遮罩', 'error')
@@ -310,7 +281,7 @@ export default function MaskEditorModal() {
 
         fillWhiteMask(maskCanvas)
 
-        if (maskDraft?.targetImageId === targetImageId) {
+        if (maskDraft?.targetImageId === imageId) {
           try {
             const draftImage = await loadImage(maskDraft.maskDataUrl)
             if (cancelled) return
@@ -357,31 +328,18 @@ export default function MaskEditorModal() {
     }
   }, [imageId, maskDraft, setMaskEditorImageId, showToast])
 
-  useEffect(() => {
-    const frame = baseFrameRef.current
-    if (!frame || !size) return
-    const update = () => setFrameWidth(frame.clientWidth)
-    update()
-    const observer = new ResizeObserver(update)
-    observer.observe(frame)
-    return () => observer.disconnect()
-  }, [size])
-
-  if (!imageId) return null
-
   const isReady = Boolean(sourceDataUrl && size && !isLoading)
   const canUndo = historyState.undo > 0 && isReady && !isSaving
   const canRedo = historyState.redo > 0 && isReady && !isSaving
   const hasMask = maskDraft?.targetImageId === imageId
   // 屏幕像素与遮罩像素的换算比例，包含缩放
-  const viewScale = size && frameWidth ? (frameWidth / size.width) * viewport.transform.scale : 0
+  const viewScale = size ? (viewport.frameWidth / size.width) * viewport.transform.scale : 0
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     const canvas = maskCanvasRef.current
     if (!canvas || !isReady || isSaving || (event.pointerType !== 'touch' && event.button !== 0)) return
     event.preventDefault()
-    const view = event.currentTarget
-    if (!view.hasPointerCapture(event.pointerId)) view.setPointerCapture(event.pointerId)
+    event.currentTarget.setPointerCapture(event.pointerId)
 
     const viewportGesture = viewport.pointerDown(event)
     if (viewportGesture === 'pan') return
@@ -457,29 +415,23 @@ export default function MaskEditorModal() {
 
   const handleSave = async () => {
     const canvas = maskCanvasRef.current
-    const savingSessionId = activeSessionIdRef.current
-    if (!canvas || !sourceDataUrl || !imageId || !isReady || isSaving || !savingSessionId) return
+    if (!canvas || !sourceDataUrl || !isReady || isSaving) return
 
     const token = ++saveTokenRef.current
-    const savingImageId = imageId
     try {
       setIsSaving(true)
       const blob = await canvasToBlob(canvas, 'image/png')
       const maskDataUrl = await blobToDataUrl(blob)
       const workingTargetId = await storeImage(sourceDataUrl, 'upload')
-      if (
-        saveTokenRef.current !== token ||
-        activeSessionIdRef.current !== savingSessionId ||
-        useStore.getState().maskEditorImageId !== savingImageId
-      ) return
+      if (saveTokenRef.current !== token) return
 
       const latestStore = useStore.getState()
       latestStore.setInputImages(
-        replaceMaskTargetImage(latestStore.inputImages, savingImageId, {
+        replaceMaskTargetImage(latestStore.inputImages, imageId, {
           id: workingTargetId,
           dataUrl: sourceDataUrl,
         }),
-        { equivalentImageIds: { [savingImageId]: workingTargetId } },
+        { equivalentImageIds: { [imageId]: workingTargetId } },
       )
       setMaskDraft({
         targetImageId: workingTargetId,
@@ -489,11 +441,7 @@ export default function MaskEditorModal() {
       setMaskEditorImageId(null)
       showToast('遮罩已保存', 'success')
     } catch (err) {
-      if (
-        saveTokenRef.current !== token ||
-        activeSessionIdRef.current !== savingSessionId ||
-        useStore.getState().maskEditorImageId !== savingImageId
-      ) return
+      if (saveTokenRef.current !== token) return
       showToast(err instanceof Error ? err.message : String(err), 'error')
     } finally {
       if (saveTokenRef.current === token) setIsSaving(false)
@@ -504,7 +452,7 @@ export default function MaskEditorModal() {
   const brushPoint = !size || viewport.isAltPressed
     ? null
     : isAdjustingSize
-    ? hoverPoint ?? viewport.getVisibleCenter(frameWidth / size.width)
+    ? hoverPoint ?? viewport.getVisibleCenter(viewport.frameWidth / size.width)
     : hoverPoint
   const canvasCursor = viewport.isPanning ? 'grabbing' : viewport.isAltPressed ? 'grab' : brushPoint ? 'none' : 'crosshair'
 
@@ -600,16 +548,7 @@ export default function MaskEditorModal() {
           onAdjustEnd={() => setIsAdjustingSize(false)}
         />
 
-        {viewport.isZoomed && (
-          <TooltipButton
-            tooltip="重置视图"
-            wrapperClassName="absolute bottom-3 right-3 z-10 inline-flex"
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-gray-200/80 bg-white/95 text-gray-600 shadow-sm transition hover:text-gray-900 dark:border-white/[0.08] dark:bg-gray-800/95 dark:text-gray-300 dark:hover:text-white"
-            onClick={resetViewTransform}
-          >
-            <ResetViewIcon />
-          </TooltipButton>
-        )}
+        {viewport.isZoomed && <EditorResetViewButton onClick={resetViewTransform} />}
       </div>
 
       {/* 底部说明与操作 */}

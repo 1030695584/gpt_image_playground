@@ -115,17 +115,12 @@ export function getShapePolylines(el: SketchShapeElement): SketchPoint[][] {
         return { x: cx + (hx / 32) * b.width, y: b.y + ((hy + 12) / 29) * b.height }
       })]
   }
-  return []
-}
-
-export function getTextLines(el: SketchTextElement) {
-  return el.text.split('\n')
 }
 
 export function measureTextElement(ctx: CanvasRenderingContext2D, el: SketchTextElement) {
   ctx.save()
   ctx.font = `${el.fontSize}px ${SKETCH_FONT_FAMILY}`
-  const lines = getTextLines(el)
+  const lines = el.text.split('\n')
   const width = Math.max(el.fontSize * 0.5, ...lines.map((line) => ctx.measureText(line).width))
   ctx.restore()
   return { width, height: lines.length * el.fontSize * SKETCH_LINE_HEIGHT }
@@ -294,7 +289,7 @@ export function drawSketchElement(ctx: CanvasRenderingContext2D, el: SketchEleme
     // 文字在行高内垂直居中，与编辑框（CSS line-height）的显示保持一致
     ctx.textBaseline = 'middle'
     const lineHeight = el.fontSize * SKETCH_LINE_HEIGHT
-    getTextLines(el).forEach((line, idx) => ctx.fillText(line, el.x, el.y + lineHeight / 2 + idx * lineHeight))
+    el.text.split('\n').forEach((line, idx) => ctx.fillText(line, el.x, el.y + lineHeight / 2 + idx * lineHeight))
     ctx.restore()
     return
   }
@@ -331,8 +326,11 @@ export function drawSketchElement(ctx: CanvasRenderingContext2D, el: SketchEleme
   ctx.restore()
 }
 
-/** 根据当前尺寸参数推导画板比例，长边固定，保证不同比例下笔画粗细观感一致 */
-export function getSketchCanvasSize(size: string, longEdge = 1536) {
+/** 画板长边像素，空白画板和底图都缩放到这个尺寸，保证笔画粗细观感一致 */
+export const SKETCH_LONG_EDGE = 1536
+
+/** 根据当前尺寸参数推导画板比例 */
+export function getSketchCanvasSize(size: string, longEdge = SKETCH_LONG_EDGE) {
   const match = /^\s*(\d+)\s*[xX×]\s*(\d+)\s*$/.exec(size)
   const width = match ? Number(match[1]) : 1
   const height = match ? Number(match[2]) : 1
@@ -351,8 +349,7 @@ export function drawEraseStroke(ctx: CanvasRenderingContext2D, stroke: SketchEra
 
 /** 把带擦除痕迹的元素单独画到临时画布上，返回临时画布在文档中的左上角坐标 */
 function renderErasedElement(el: SketchElement, scratch: HTMLCanvasElement) {
-  const sctx = scratch.getContext('2d', { willReadFrequently: true })
-  if (!sctx) return null
+  const sctx = scratch.getContext('2d')!
   const b = getElementBounds(el, sctx)
   const x = Math.floor(b.x) - 2
   const y = Math.floor(b.y) - 2
@@ -363,7 +360,7 @@ function renderErasedElement(el: SketchElement, scratch: HTMLCanvasElement) {
   drawSketchElement(sctx, el)
   for (const stroke of el.erase ?? []) drawEraseStroke(sctx, stroke)
   sctx.setTransform(1, 0, 0, 1, 0, 0)
-  return { ctx: sctx, x, y }
+  return { x, y }
 }
 
 /** 带擦除痕迹的元素先画到临时画布再贴回，避免擦掉其他元素 */
@@ -372,15 +369,18 @@ export function drawSketchElementWithErase(ctx: CanvasRenderingContext2D, el: Sk
     drawSketchElement(ctx, el)
     return
   }
-  const rendered = renderErasedElement(el, scratch)
-  if (rendered) ctx.drawImage(scratch, rendered.x, rendered.y)
+  const offset = renderErasedElement(el, scratch)
+  ctx.drawImage(scratch, offset.x, offset.y)
 }
 
-/** 擦除后元素是否还有可见像素；完全擦掉的元素应被移除，避免留下不可见却可选中的对象 */
-export function isSketchElementVisible(el: SketchElement, scratch: HTMLCanvasElement) {
-  const rendered = renderErasedElement(el, scratch)
-  if (!rendered) return true
-  const data = rendered.ctx.getImageData(0, 0, scratch.width, scratch.height).data
+/**
+ * 擦除后元素是否还有可见像素；完全擦掉的元素应被移除，避免留下不可见却可选中的对象。
+ * probe 需是专用画布：首次取上下文时声明 willReadFrequently，不能与绘制用的临时画布共用。
+ */
+export function isSketchElementVisible(el: SketchElement, probe: HTMLCanvasElement) {
+  const pctx = probe.getContext('2d', { willReadFrequently: true })!
+  renderErasedElement(el, probe)
+  const data = pctx.getImageData(0, 0, probe.width, probe.height).data
   for (let i = 3; i < data.length; i += 4) {
     if (data[i] > 8) return true
   }

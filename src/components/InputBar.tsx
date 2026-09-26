@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, removeMultipleTasks, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
-import { DEFAULT_PARAMS, type TaskRecord } from '../types'
+import { DEFAULT_PARAMS, MAX_INPUT_IMAGES, type TaskRecord } from '../types'
 import { getActiveAgentRounds } from '../lib/agentConversationState'
 import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { getImageGenerationModel, isGptImage25Model } from '../lib/imageModels'
@@ -24,7 +24,6 @@ import InputBatchBars from './input/inputBatchBars'
 import InputParamsPanel from './input/inputParamsPanel'
 
 /** API 支持的最大参考图数量 */
-const API_MAX_IMAGES = 16
 
 function getFavoriteCollectionTasksForBatch(collectionId: string, tasks: TaskRecord[], defaultFavoriteCollectionId: string | null) {
   const favoriteTasks = tasks.filter((task) => task.isFavorite)
@@ -494,8 +493,8 @@ export default function InputBar() {
         ]
       : []),
   ]
-  const atImageLimit = inputImages.length >= API_MAX_IMAGES
-  const uploadImageTooltipText = atImageLimit ? `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加` : '添加图片'
+  const atImageLimit = inputImages.length >= MAX_INPUT_IMAGES
+  const uploadImageTooltipText = atImageLimit ? `参考图数量已达上限（${MAX_INPUT_IMAGES} 张），无法继续添加` : '添加图片'
   const transparentOutputHint = useHintTooltip()
   const handleTransparentOutputMenuOpenChange = useCallback((open: boolean) => {
     if (open) transparentOutputHint.hide()
@@ -800,15 +799,15 @@ export default function InputBar() {
   const handleFiles = async (files: FileList | File[]) => {
     try {
       const currentCount = useStore.getState().inputImages.length
-      if (currentCount >= API_MAX_IMAGES) {
+      if (currentCount >= MAX_INPUT_IMAGES) {
         useStore.getState().showToast(
-          `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`,
+          `参考图数量已达上限（${MAX_INPUT_IMAGES} 张），无法继续添加`,
           'error',
         )
         return
       }
 
-      const remaining = API_MAX_IMAGES - currentCount
+      const remaining = MAX_INPUT_IMAGES - currentCount
       const accepted = Array.from(files).filter((f) => f.type.startsWith('image/'))
       const toAdd = accepted.slice(0, remaining)
       const discarded = accepted.length - toAdd.length
@@ -819,7 +818,7 @@ export default function InputBar() {
 
       if (discarded > 0) {
         useStore.getState().showToast(
-          `已达上限 ${API_MAX_IMAGES} 张，${discarded} 张图片被丢弃`,
+          `已达上限 ${MAX_INPUT_IMAGES} 张，${discarded} 张图片被丢弃`,
           'error',
         )
       }
@@ -1125,6 +1124,17 @@ export default function InputBar() {
     document.addEventListener('selectionchange', handleSelectionChange)
     return () => document.removeEventListener('selectionchange', handleSelectionChange)
   }, [])
+
+  // 输入栏卡片带 backdrop-blur，fixed 遮罩只能覆盖卡片内部，因此改为监听全局按下来关闭菜单
+  useEffect(() => {
+    if (!showUploadMenu) return
+    const closeMenu = (event: PointerEvent) => {
+      if ((event.target as Element).closest('[data-add-image-menu]')) return
+      setShowUploadMenu(false)
+    }
+    document.addEventListener('pointerdown', closeMenu, true)
+    return () => document.removeEventListener('pointerdown', closeMenu, true)
+  }, [showUploadMenu])
 
   // 点击外部时使 input 栏失焦
   useEffect(() => {
@@ -1479,11 +1489,12 @@ export default function InputBar() {
   // 桌面端与移动端共用的“添加图片”按钮与菜单，移动端额外提供拍照
   const renderAddImageButton = (mobile: boolean) => (
     <div
+      data-add-image-menu
       className="relative flex-shrink-0"
       onMouseEnter={() => setAttachHover(true)}
       onMouseLeave={() => setAttachHover(false)}
     >
-      {!mobile && <ButtonTooltip visible={attachHover && (!showUploadMenu || atImageLimit)} text={uploadImageTooltipText} />}
+      {!mobile && <ButtonTooltip visible={attachHover && !showUploadMenu} text={uploadImageTooltipText} />}
       <button
         onClick={() => {
           if (atImageLimit) return
@@ -1509,51 +1520,45 @@ export default function InputBar() {
       </button>
 
       {showUploadMenu && (
-        <>
-          <div
-            className="fixed inset-0 z-40"
-            onClick={() => setShowUploadMenu(false)}
-          />
-          <div className={`absolute bottom-full ${mobile ? 'left-0' : 'right-0'} mb-2 w-32 bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-2 duration-200`}>
-            {mobile && (
-              <button
-                className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
-                onClick={() => {
-                  setShowUploadMenu(false)
-                  cameraInputRef.current?.click()
-                }}
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-                拍照
-              </button>
-            )}
+        <div className={`absolute bottom-full ${mobile ? 'left-0' : 'right-0'} mb-2 w-32 bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-2 duration-200`}>
+          {mobile && (
             <button
               className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
               onClick={() => {
                 setShowUploadMenu(false)
-                fileInputRef.current?.click()
+                cameraInputRef.current?.click()
               }}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
-              上传图片
+              拍照
             </button>
-            <button
-              className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
-              onClick={() => {
-                setShowUploadMenu(false)
-                setSketchBoard({ baseImageSrc: null })
-              }}
-            >
-              <SketchIcon className="w-4 h-4" />
-              画板
-            </button>
-          </div>
-        </>
+          )}
+          <button
+            className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
+            onClick={() => {
+              setShowUploadMenu(false)
+              fileInputRef.current?.click()
+            }}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+            </svg>
+            上传图片
+          </button>
+          <button
+            className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
+            onClick={() => {
+              setShowUploadMenu(false)
+              setSketchBoard({ baseImageSrc: null })
+            }}
+          >
+            <SketchIcon className="w-4 h-4" />
+            画板
+          </button>
+        </div>
       )}
     </div>
   )
@@ -1648,7 +1653,7 @@ export default function InputBar() {
 
   return (
     <>
-      <DragUploadOverlay visible={isDragging} atImageLimit={atImageLimit} maxImages={API_MAX_IMAGES} />
+      <DragUploadOverlay visible={isDragging} atImageLimit={atImageLimit} maxImages={MAX_INPUT_IMAGES} />
 
       {showSizePicker && (
         <SizePickerModal

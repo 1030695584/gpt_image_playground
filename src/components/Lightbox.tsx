@@ -206,7 +206,7 @@ export default function Lightbox() {
       setSketchBoard({ baseImageSrc, replaceImageId: imageId })
     }
     const openMask = () => {
-      if (useStore.getState().maskDraft) {
+      if (maskDraft) {
         showToast('只能有一张遮罩图，请先移除现有遮罩', 'info')
         return
       }
@@ -249,7 +249,7 @@ export default function Lightbox() {
         },
       ],
     })
-  }, [close, isInputImage, lightboxImageId, maskDraft?.targetImageId, setConfirmDialog, setMaskEditorImageId, setSettings, setSketchBoard, settings.referenceImageEditAction, showToast, src])
+  }, [close, isInputImage, lightboxImageId, maskDraft, setConfirmDialog, setMaskEditorImageId, setSettings, setSketchBoard, settings.referenceImageEditAction, showToast, src])
 
   // 键盘左右切换
   useEffect(() => {

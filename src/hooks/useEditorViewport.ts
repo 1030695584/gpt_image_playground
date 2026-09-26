@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent, RefObject } from 'react'
 import {
   clampViewTransform,
@@ -21,7 +21,7 @@ interface PanGesture {
   startTransform: ViewTransform
 }
 
-export const DEFAULT_VIEW_TRANSFORM: ViewTransform = { scale: 1, x: 0, y: 0 }
+const DEFAULT_VIEW_TRANSFORM: ViewTransform = { scale: 1, x: 0, y: 0 }
 
 /**
  * 编辑器画布的缩放与平移：Alt / Ctrl + 滚轮缩放，Alt + 拖动平移，触屏双指捏合缩放和平移。
@@ -40,14 +40,12 @@ export function useEditorViewport(
   const [transform, setTransform] = useState<ViewTransform>(DEFAULT_VIEW_TRANSFORM)
   const [isAltPressed, setIsAltPressed] = useState(false)
   const [isPanning, setIsPanning] = useState(false)
+  const [frameWidth, setFrameWidth] = useState(0)
 
   /** 可见区域相对于画布布局框左上角的位置 */
-  function getBounds(): ViewBounds | undefined {
-    const frame = frameRef.current
-    const view = viewportRef.current
-    if (!frame || !view) return undefined
-    const frameRect = frame.getBoundingClientRect()
-    const viewRect = view.getBoundingClientRect()
+  function getBounds(): ViewBounds {
+    const frameRect = frameRef.current!.getBoundingClientRect()
+    const viewRect = viewportRef.current!.getBoundingClientRect()
     return { x: viewRect.left - frameRect.left, y: viewRect.top - frameRect.top, width: viewRect.width, height: viewRect.height }
   }
 
@@ -56,14 +54,10 @@ export function useEditorViewport(
     return { width: frame.clientWidth, height: frame.clientHeight }
   }
 
-  function commit(next: ViewTransform) {
-    const clamped = frameRef.current ? clampViewTransform(next, getFrameSize(), getBounds()) : next
+  function commit(next = DEFAULT_VIEW_TRANSFORM) {
+    const clamped = clampViewTransform(next, getFrameSize(), getBounds())
     transformRef.current = clamped
     setTransform(clamped)
-  }
-
-  function reset(next = DEFAULT_VIEW_TRANSFORM) {
-    commit(next)
   }
 
   function getFramePoint(point: Point) {
@@ -73,7 +67,6 @@ export function useEditorViewport(
 
   function beginPinch() {
     const [a, b] = Array.from(pointersRef.current.values())
-    if (!a || !b || !frameRef.current) return
     pinchRef.current = {
       startTransform: transformRef.current,
       startCentroid: getFramePoint({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }),
@@ -100,10 +93,10 @@ export function useEditorViewport(
     }
   }, [active])
 
-  useEffect(() => {
-    const frame = frameRef.current
-    const view = viewportRef.current
-    if (!active || !frame || !view) return
+  useLayoutEffect(() => {
+    if (!active) return
+    const frame = frameRef.current!
+    const view = viewportRef.current!
 
     // React 的 wheel 监听是被动的，无法阻止浏览器缩放，这里改用原生监听
     const handleWheel = (event: WheelEvent) => {
@@ -117,7 +110,11 @@ export function useEditorViewport(
         getBounds(),
       ))
     }
-    const observer = new ResizeObserver(() => commit(transformRef.current))
+    const observer = new ResizeObserver(() => {
+      setFrameWidth(frame.clientWidth)
+      commit(transformRef.current)
+    })
+    setFrameWidth(frame.clientWidth)
     view.addEventListener('wheel', handleWheel, { passive: false })
     observer.observe(frame)
     observer.observe(view)
@@ -159,7 +156,7 @@ export function useEditorViewport(
       pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
     }
     const pinch = pinchRef.current
-    if (!pinch || !frameRef.current || pointersRef.current.size < 2) return Boolean(pinch)
+    if (!pinch || pointersRef.current.size < 2) return Boolean(pinch)
 
     const [a, b] = Array.from(pointersRef.current.values())
     commit(getPinchTransform({
@@ -195,12 +192,14 @@ export function useEditorViewport(
     isZoomed,
     isAltPressed,
     isPanning,
+    /** 画布布局框（未缩放）的宽度 */
+    frameWidth,
     /** 是否处于双指手势中（包括刚抬起一根手指的余下阶段） */
     isPinching: () => pinchRef.current != null,
     /** 可见区域中心对应的内容坐标（contentScale 为内容像素与布局框像素之比） */
     getVisibleCenter: (contentScale: number): Point | null => {
+      if (contentScale <= 0) return null
       const b = getBounds()
-      if (!b || contentScale <= 0) return null
       const t = transformRef.current
       return {
         x: (b.x + b.width / 2 - t.x) / (t.scale * contentScale),
@@ -208,7 +207,6 @@ export function useEditorViewport(
       }
     },
     commit,
-    reset,
     pointerDown,
     pointerMove,
     pointerUp,

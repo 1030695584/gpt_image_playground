@@ -1,4 +1,5 @@
 import type { PointerEvent as ReactPointerEvent, ReactNode, SVGProps } from 'react'
+import { TooltipButton } from '../TooltipButton'
 
 /** 画板与遮罩编辑共用的弹窗外壳、工具按钮样式、粗细滑块和笔刷光标 */
 
@@ -82,8 +83,10 @@ export function EditorSizeSlider({
         aria-valuemin={min}
         aria-valuemax={max}
         aria-valuenow={value}
-        tabIndex={0}
+        aria-disabled={disabled}
+        tabIndex={disabled ? -1 : 0}
         onKeyDown={(e) => {
+          if (disabled) return
           if (e.key === 'ArrowUp' || e.key === 'ArrowRight') onChange(Math.min(max, value + 1))
           if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') onChange(Math.max(min, value - 1))
         }}
@@ -106,6 +109,20 @@ export function EditorSizeSlider({
       </div>
       <span className="min-w-[2.5rem] text-center text-sm font-semibold tabular-nums text-gray-600 dark:text-gray-300">{displayValue}</span>
     </div>
+  )
+}
+
+/** 放大后右下角的重置视图按钮 */
+export function EditorResetViewButton({ onClick }: { onClick: () => void }) {
+  return (
+    <TooltipButton
+      tooltip="重置视图"
+      wrapperClassName="absolute bottom-3 right-3 z-10 inline-flex"
+      className="flex h-9 w-9 items-center justify-center rounded-full border border-gray-200/80 bg-white/95 text-gray-600 shadow-sm transition hover:text-gray-900 dark:border-white/[0.08] dark:bg-gray-800/95 dark:text-gray-300 dark:hover:text-white"
+      onClick={onClick}
+    >
+      <ResetViewIcon />
+    </TooltipButton>
   )
 }
 
@@ -166,7 +183,7 @@ export function RedoIcon() {
   )
 }
 
-export function ResetViewIcon() {
+function ResetViewIcon() {
   return (
     <EditorIcon>
       <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />

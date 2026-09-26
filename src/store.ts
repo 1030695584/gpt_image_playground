@@ -13,6 +13,7 @@ import type {
   TaskParams,
   InputImage,
   MaskDraft,
+  SketchBoardRequest,
   TaskRecord,
   FavoriteCollection,
   ResponsesOutputItem,
@@ -268,11 +269,6 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
 }
 
 // ===== Store 类型 =====
-
-interface SketchBoardRequest {
-  baseImageSrc: string | null
-  replaceImageId?: string
-}
 
 interface AppState {
   // 模式
