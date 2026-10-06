@@ -80,7 +80,10 @@ export interface ApiProfile {
   provider: ApiProvider
   baseUrl: string
   apiKey: string
+  /** 模型 ID 列表，多个模型以 `, ` 分隔 */
   model: string
+  /** 首页选中的模型；不在列表中时回退到第一个 */
+  selectedModel?: string
   imageGenerationModel?: string
   timeout: number
   apiMode: ApiMode
@@ -115,6 +118,16 @@ export interface SketchBoardRequest {
   replaceImageId?: string
 }
 
+/** 正在进行的批量提交进度 */
+export interface BatchProgress {
+  total: number
+  started: number
+  finished: number
+}
+
+/** 批量提交模式：排队逐条执行，或按并发数同时执行 */
+export type BatchPromptMode = 'queue' | 'concurrent'
+
 export interface AppSettings {
   /** 旧版单配置字段：保留用于导入/查询参数兼容，实际请求以 active profile 为准 */
   baseUrl: string
@@ -135,6 +148,14 @@ export interface AppSettings {
   allowPromptRewrite: boolean
   taskCompletionNotification: boolean
   enterSubmit: boolean
+  /** 偏好设置：是否在首页提供多提示词批量提交 */
+  showBatchPrompt: boolean
+  /** 多提示词批量提交，提示词之间空两行分隔 */
+  batchPromptEnabled: boolean
+  batchPromptMode: BatchPromptMode
+  /** 并发模式下是否限制并发数（默认开启），关闭时全部同时提交 */
+  batchPromptConcurrencyLimited: boolean
+  batchPromptConcurrency: number
   referenceImageEditAction: ReferenceImageEditAction
   zipDownloadRoutes: ZipDownloadRoute[]
   agentScrollToBottomAfterSubmit: boolean

@@ -737,7 +737,7 @@ export default function DetailModal() {
                       copyErrorTooltip.handlers.onClick()
                       handleCopyError()
                     }}
-                    className="inline-flex items-center justify-center rounded-full border border-red-200/80 bg-white/80 px-3 py-1.5 text-red-500 transition hover:bg-red-50 dark:border-red-400/20 dark:bg-white/[0.04] dark:hover:bg-red-500/10"
+                    className="inline-flex items-center justify-center rounded-full border border-red-200/80 bg-white/80 px-3 py-1.5 text-red-500 transition hover:bg-red-500/[0.1] dark:border-red-400/20 dark:bg-white/[0.04] dark:hover:bg-red-500/[0.16]"
                     aria-label="复制完整报错"
                   >
                     <CopyIcon className="h-4 w-4" />

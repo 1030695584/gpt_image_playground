@@ -576,7 +576,7 @@ function MaskEditor({ imageId }: { imageId: string }) {
         </div>
         <div className="flex flex-none items-center gap-2">
           {hasMask && (
-            <button onClick={handleRemoveMask} disabled={isSaving} className="flex h-10 items-center rounded-xl bg-gray-100 px-4 text-sm font-medium text-gray-700 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:bg-white/[0.08] dark:text-gray-300 dark:hover:bg-red-500/20 dark:hover:text-red-400">
+            <button onClick={handleRemoveMask} disabled={isSaving} className="flex h-10 items-center rounded-xl bg-gray-100 px-4 text-sm font-medium text-gray-700 transition hover:bg-red-500/[0.1] hover:text-red-600 disabled:opacity-50 dark:bg-white/[0.08] dark:text-gray-300 dark:hover:bg-red-500/20 dark:hover:text-red-400">
               移除遮罩
             </button>
           )}

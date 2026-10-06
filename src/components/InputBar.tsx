@@ -1,11 +1,12 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, removeMultipleTasks, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
+import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImageFromFile, removeMultipleTasks, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
 import { DEFAULT_PARAMS, MAX_INPUT_IMAGES, type TaskRecord } from '../types'
 import { getActiveAgentRounds } from '../lib/agentConversationState'
-import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings } from '../lib/apiProfiles'
+import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings, resolveApiProfileModel, splitModelList } from '../lib/apiProfiles'
 import { getImageGenerationModel, isGptImage25Model } from '../lib/imageModels'
 import { ensureImageCached, getCachedImage } from '../lib/imageCache'
+import { splitBatchPrompts } from '../lib/batchPrompts'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { getAtImageQuery, getImageComments, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { normalizeCodexCliImageSize, normalizeImageSize } from '../lib/size'
@@ -93,8 +94,12 @@ export default function InputBar() {
   const clearInputImages = useStore((s) => s.clearInputImages)
   const params = useStore((s) => s.params)
   const setParams = useStore((s) => s.setParams)
+  const setSettings = useStore((s) => s.setSettings)
+  const batchProgress = useStore((s) => s.batchProgress)
   const settings = useStore((s) => s.settings)
   const reusedTaskApiProfileId = useStore((s) => s.reusedTaskApiProfileId)
+  const reusedTaskApiModel = useStore((s) => s.reusedTaskApiModel)
+  const setReusedTaskApiModel = useStore((s) => s.setReusedTaskApiModel)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const showToast = useStore((s) => s.showToast)
@@ -417,11 +422,27 @@ export default function InputBar() {
       ? getAgentImageApiProfile(settings) ?? settingsActiveProfile
       : settingsActiveProfile
   ), [appMode, settings, settingsActiveProfile])
-  const activeProfile = useMemo(() => (
-    appMode !== 'agent' && settings.reuseTaskApiProfileTemporarily && reusedTaskApiProfileId
-      ? settings.profiles.find((profile) => profile.id === reusedTaskApiProfileId) ?? currentActiveProfile
-      : currentActiveProfile
-  ), [appMode, currentActiveProfile, reusedTaskApiProfileId, settings])
+  const activeProfile = useMemo(() => {
+    const reusedProfile = appMode !== 'agent' && settings.reuseTaskApiProfileTemporarily && reusedTaskApiProfileId
+      ? settings.profiles.find((profile) => profile.id === reusedTaskApiProfileId)
+      : undefined
+    return reusedProfile ? resolveApiProfileModel(reusedProfile, reusedTaskApiModel ?? undefined) : currentActiveProfile
+  }, [appMode, currentActiveProfile, reusedTaskApiModel, reusedTaskApiProfileId, settings])
+  const isTemporarilyReusedProfile = activeProfile.id !== currentActiveProfile.id
+  const modelOptions = useMemo(() => (
+    splitModelList(settings.profiles.find((profile) => profile.id === activeProfile.id)?.model ?? activeProfile.model)
+      .map((model) => ({ label: model, value: model }))
+  ), [activeProfile.id, activeProfile.model, settings.profiles])
+  const handleModelChange = useCallback((model: string) => {
+    // 临时复用其他配置时只切换本次复用的模型，不改动该配置记住的选择
+    if (isTemporarilyReusedProfile) {
+      setReusedTaskApiModel(model)
+      return
+    }
+    setSettings({
+      profiles: settings.profiles.map((profile) => profile.id === activeProfile.id ? { ...profile, selectedModel: model } : profile),
+    })
+  }, [activeProfile.id, isTemporarilyReusedProfile, setReusedTaskApiModel, setSettings, settings.profiles])
   const activeAgentConversation = appMode === 'agent'
     ? agentConversations.find((conversation) => conversation.id === activeAgentConversationId) ?? null
     : null
@@ -432,14 +453,28 @@ export default function InputBar() {
       : normalizeSettings({ ...settings, activeProfileId: activeProfile.id })
   ), [activeProfile.id, settingsActiveProfile.id, settings])
   const hasSubmitApiConfig = Boolean(activeProfile.apiKey)
-  const canSubmit = Boolean(prompt.trim() && hasSubmitApiConfig && !activeAgentIsRunning)
+  // 批量进行中暂停画廊和 Agent 的提交，需等待完成或停止后再提交
+  const batchRunning = Boolean(batchProgress)
+  const canSubmit = Boolean(prompt.trim() && hasSubmitApiConfig && !activeAgentIsRunning && !batchRunning)
+  const batchEnabled = appMode === 'gallery' && settings.showBatchPrompt && settings.batchPromptEnabled
+  // 批量进行中始终在画廊显示入口，以便查看进度和停止
+  const showBatch = appMode === 'gallery' && (settings.showBatchPrompt || batchRunning)
+  const batchPromptCount = useMemo(() => batchEnabled ? splitBatchPrompts(prompt).length : 0, [batchEnabled, prompt])
   const submitButtonAriaLabel = activeAgentIsRunning
     ? '停止生成'
     : hasSubmitApiConfig
-    ? maskDraft ? '遮罩编辑' : '生成图像'
+    ? maskDraft ? '遮罩编辑' : batchEnabled ? `批量生成 ${batchPromptCount} 条` : '生成图像'
     : '请先配置 API'
-  const submitTooltipText = activeAgentIsRunning ? '停止生成' : '尚未完成 API 配置，请在右上角设置中进行'
-  const promptPlaceholder = '描述你想生成的图片，可输入 @ 来指定参考图...'
+  const submitTooltipText = activeAgentIsRunning
+    ? '停止生成'
+    : !hasSubmitApiConfig
+    ? '尚未完成 API 配置，请在右上角设置中进行'
+    : appMode === 'agent'
+    ? '画廊批量任务进行中，请等待完成或回到画廊停止后再提交'
+    : '批量任务进行中，请等待完成或停止后再提交'
+  const promptPlaceholder = batchEnabled
+    ? '每条提示词之间空两行分隔，可输入 @ 来指定参考图...'
+    : '描述你想生成的图片，可输入 @ 来指定参考图...'
   const submitCurrentMode = useCallback(() => {
     if (appMode === 'agent') {
       void submitAgentMessage()
@@ -1206,7 +1241,7 @@ export default function InputBar() {
     }
   }, [])
 
-  const selectClass = 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm'
+  const selectClass = 'px-3 py-1.5 rounded-xl border border-transparent bg-black/[0.04] dark:bg-white/[0.06] hover:bg-black/[0.07] dark:hover:bg-white/[0.1] text-xs transition-all duration-200'
 
   const getTouchDropIndex = (touch: React.Touch) => {
     const target = document
@@ -1590,7 +1625,7 @@ export default function InputBar() {
           action: () => clearInputImages(),
         })
       }
-      className="w-[52px] h-[52px] rounded-xl border border-dashed border-gray-300 dark:border-white/[0.08] flex flex-col items-center justify-center gap-0.5 text-gray-400 dark:text-gray-500 hover:text-red-500 hover:border-red-300 hover:bg-red-50/50 dark:hover:bg-red-950/30 transition-all cursor-pointer flex-shrink-0"
+      className="w-[52px] h-[52px] rounded-xl border border-dashed border-gray-300 dark:border-white/[0.08] flex flex-col items-center justify-center gap-0.5 text-gray-400 dark:text-gray-500 hover:text-red-600 hover:border-red-300 hover:bg-red-500/[0.1] dark:hover:bg-red-500/[0.16] transition-all cursor-pointer flex-shrink-0"
       title={maskTargetImage ? '清空遮罩主图、参考图和遮罩' : '清空全部参考图'}
     >
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1602,7 +1637,7 @@ export default function InputBar() {
 
   const renderImageThumbs = () => {
     return (
-      <div ref={imagesRef}>
+      <div ref={imagesRef} className="sm:[contain:inline-size]">
         <div className="grid grid-cols-[repeat(auto-fill,52px)] justify-between gap-x-2 gap-y-3 mb-3">
           {inputImages.map((img, idx) => renderImageThumb(img, idx))}
           {renderClearAllButton()}
@@ -1620,12 +1655,13 @@ export default function InputBar() {
     )
   }
 
-  const renderParams = (cols: string) => (
+  const renderParams = () => (
     <InputParamsPanel
-      cols={cols}
       params={params}
       setParams={setParams}
       activeProfile={activeProfile}
+      modelOptions={modelOptions}
+      onModelChange={handleModelChange}
       isFalProvider={isFalProvider}
       isFalTextToImage={isFalTextToImage}
       displaySize={displaySize}
@@ -1661,6 +1697,15 @@ export default function InputBar() {
       sizeHint={sizeHint}
       qualityHint={qualityHint}
       onOpenSizePicker={() => setShowSizePicker(true)}
+      showBatch={showBatch}
+      batchEnabled={batchEnabled}
+      batchMode={settings.batchPromptMode}
+      batchConcurrencyLimited={settings.batchPromptConcurrencyLimited}
+      batchConcurrency={settings.batchPromptConcurrency}
+      batchPromptCount={batchPromptCount}
+      batchProgress={batchProgress}
+      onBatchChange={setSettings}
+      onStopBatch={stopBatchPrompts}
     />
   )
 
@@ -1683,26 +1728,29 @@ export default function InputBar() {
 
       <div
         data-input-bar
-        className={`fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl px-3 sm:px-4 transition-all duration-300${promptExpanded ? ' flex flex-col' : ''}`}
+        className={`fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl sm:w-max sm:min-w-[min(56rem,100%)] sm:max-w-[min(80rem,100%)] px-3 sm:px-4 transition-all duration-300${promptExpanded ? ' flex flex-col' : ''}`}
         style={promptExpanded ? { top: `${promptExpandedTop}px`, transitionProperty: 'none' } : undefined}
       >
-        <InputBatchBars
-          showFavoriteCollectionBatchBar={showFavoriteCollectionBatchBar}
-          showTaskBatchBar={showTaskBatchBar}
-          selectedTaskIds={selectedTaskIds}
-          tasks={tasks}
-          clearFavoriteCollectionSelection={clearFavoriteCollectionSelection}
-          onSelectAllVisibleFavoriteCollections={handleSelectAllVisibleFavoriteCollections}
-          onInvertVisibleFavoriteCollections={handleInvertVisibleFavoriteCollections}
-          onDownloadSelectedFavoriteCollections={handleDownloadSelectedFavoriteCollections}
-          onDeleteSelectedFavoriteCollections={handleDeleteSelectedFavoriteCollections}
-          clearSelection={clearSelection}
-          onSelectAllVisibleTasks={handleSelectAllVisibleTasks}
-          onInvertVisibleTasks={handleInvertVisibleTasks}
-          onToggleFavorite={handleToggleFavorite}
-          onDownloadSelected={handleDownloadSelected}
-          onDeleteSelected={handleDeleteSelected}
-        />
+        {/* 桌面端输入栏宽度只由参数栏内容决定（最宽与任务卡片区域对齐），其余区域用 contain 排除在宽度计算之外 */}
+        <div className="sm:[contain:inline-size]">
+          <InputBatchBars
+            showFavoriteCollectionBatchBar={showFavoriteCollectionBatchBar}
+            showTaskBatchBar={showTaskBatchBar}
+            selectedTaskIds={selectedTaskIds}
+            tasks={tasks}
+            clearFavoriteCollectionSelection={clearFavoriteCollectionSelection}
+            onSelectAllVisibleFavoriteCollections={handleSelectAllVisibleFavoriteCollections}
+            onInvertVisibleFavoriteCollections={handleInvertVisibleFavoriteCollections}
+            onDownloadSelectedFavoriteCollections={handleDownloadSelectedFavoriteCollections}
+            onDeleteSelectedFavoriteCollections={handleDeleteSelectedFavoriteCollections}
+            clearSelection={clearSelection}
+            onSelectAllVisibleTasks={handleSelectAllVisibleTasks}
+            onInvertVisibleTasks={handleInvertVisibleTasks}
+            onToggleFavorite={handleToggleFavorite}
+            onDownloadSelected={handleDownloadSelected}
+            onDeleteSelected={handleDeleteSelected}
+          />
+        </div>
         <div ref={cardRef} className={`bg-white/70 dark:bg-gray-900/70 backdrop-blur-2xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] rounded-2xl sm:rounded-3xl p-3 sm:p-4 ring-1 ring-black/5 dark:ring-white/10${promptExpanded ? ' flex min-h-0 flex-1 flex-col' : ''}`}>
           {/* 移动端拖动条 */}
           <div
@@ -1740,9 +1788,9 @@ export default function InputBar() {
           )}
 
           {/* 输入框 */}
-          <div className={`relative grid${promptExpanded ? ' min-h-0 flex-1' : ''}`}>
+          <div className={`relative grid sm:[contain:inline-size]${promptExpanded ? ' min-h-0 flex-1' : ''}`}>
             {showAtImageMenu && (
-              <div style={{ left: `${menuLeft}px` }} className="absolute bottom-full z-50 mb-2 w-64 overflow-hidden rounded-2xl border border-gray-200/70 bg-white/95 p-1.5 shadow-xl ring-1 ring-black/5 backdrop-blur-xl dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10">
+              <div style={{ left: `${menuLeft}px` }} className="absolute bottom-full z-50 mb-2 w-64 overflow-hidden rounded-2xl border border-transparent bg-white/95 p-1.5 shadow-xl ring-1 ring-black/5 backdrop-blur-xl dark:bg-gray-800/95 dark:ring-white/[0.06]">
                 <div className="px-2 pb-1 pt-0.5 text-[11px] text-gray-400 dark:text-gray-500">选择图片引用</div>
                 <div className="max-h-56 overflow-y-auto custom-scrollbar">
                   {atImageOptions.map((option, optionIndex) => (
@@ -1877,17 +1925,17 @@ export default function InputBar() {
           {/* 参数 + 按钮 */}
           <div className="mt-3">
             {/* 桌面端布局 */}
-            <div className="hidden sm:flex items-end justify-between gap-3">
-              {renderParams('grid-cols-6')}
+            <div className="hidden sm:flex items-center justify-between gap-3">
+              {renderParams()}
 
-              <div className="flex gap-2 flex-shrink-0 mb-0.5">
+              <div className="flex gap-2 flex-shrink-0">
                 {renderAddImageButton(false)}
                 <div
                   className="relative"
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning) && submitHover} text={submitTooltipText} />
                   <button
                     onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
                     disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
@@ -1918,7 +1966,7 @@ export default function InputBar() {
             <div className="sm:hidden flex flex-col gap-2">
               <div className={`collapse-section${mobileCollapsed ? ' collapsed' : ''}`}>
                 <div className="collapse-inner">
-                  {renderParams('grid-cols-2')}
+                  {renderParams()}
                   <div className="h-2" />
                 </div>
               </div>
@@ -1930,7 +1978,7 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning) && submitHover} text={submitTooltipText} />
                   <button
                     onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
                     disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
@@ -1952,7 +2000,7 @@ export default function InputBar() {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                       </svg>
                     )}
-                    {activeAgentIsRunning ? '停止生成' : maskDraft ? '遮罩编辑' : '生成图像'}
+                    {activeAgentIsRunning ? '停止生成' : maskDraft ? '遮罩编辑' : batchEnabled ? `批量生成 ${batchPromptCount} 条` : '生成图像'}
                   </button>
                 </div>
               </div>
