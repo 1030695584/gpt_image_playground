@@ -1114,8 +1114,11 @@ export default function InputBar() {
 
       const range = getContentEditableSelection(el)
       setCursorPos(range.start)
-      // 记到 store 中，画板等弹窗关闭后可把评论胶囊插回这里，并覆盖选中的内容
-      useStore.getState().setPromptSelection(range)
+      // 记到 store 中，画板等弹窗关闭后可把评论胶囊插回这里，并覆盖选中的内容；
+      // 只记录完全落在输入框内的选区，整页全选或拖选越界时不能当成要覆盖的范围
+      if (el.contains(domRange.startContainer) && el.contains(domRange.endContainer)) {
+        useStore.getState().setPromptSelection(range)
+      }
       syncMentionTagSelection(el)
 
       const rangeRect = domRange.getBoundingClientRect()
