@@ -7,7 +7,7 @@ import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings } from 
 import { getImageGenerationModel, isGptImage25Model } from '../lib/imageModels'
 import { ensureImageCached, getCachedImage } from '../lib/imageCache'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
-import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
+import { getAtImageQuery, getImageComments, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { normalizeCodexCliImageSize, normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { getSafeBoundingClientRect } from '../lib/domRect'
@@ -19,6 +19,7 @@ import { useHintTooltip } from '../hooks/useHintTooltip'
 import { downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getTaskOutputImageZipEntries } from '../lib/downloadImages'
 import SizePickerModal from './SizePickerModal'
 import { CloseIcon, CollapseIcon, ExpandIcon, SketchIcon } from './icons'
+import { CommentBadge } from './CommentMarks'
 import ButtonTooltip from './input/buttonTooltip'
 import DragUploadOverlay from './input/dragUploadOverlay'
 import InputBatchBars from './input/inputBatchBars'
@@ -1279,6 +1280,7 @@ export default function InputBar() {
 
   const renderImageThumb = (img: (typeof inputImages)[number], idx: number) => {
     const isMaskTarget = maskDraft?.targetImageId === img.id
+    const commentCount = getImageComments(prompt, idx).length
     const imageHintText = isMaskTarget ? '遮罩图必须为第一张图' : ''
     const displaySrc = isMaskTarget && maskPreviewUrl ? maskPreviewUrl : img.dataUrl
     const isImageDragging = imageDragIndex === idx
@@ -1435,7 +1437,7 @@ export default function InputBar() {
         )}
         <div
           className={`relative w-[52px] h-[52px] rounded-xl overflow-hidden shadow-sm cursor-grab active:cursor-grabbing select-none ${
-            isMaskTarget
+            isMaskTarget || commentCount > 0
               ? 'border-2 border-blue-500'
               : 'border border-gray-200 dark:border-white/[0.08]'
           }`}
@@ -1458,6 +1460,7 @@ export default function InputBar() {
               MASK
             </span>
           )}
+          {commentCount > 0 && <CommentBadge count={commentCount} className={isMaskTarget ? 'left-1 top-[18px]' : 'left-1 top-1'} />}
           <span className="absolute bottom-1 left-1 flex h-4 w-4 items-center justify-center rounded-full bg-black/55 text-[9px] font-semibold text-white backdrop-blur-sm z-10 pointer-events-none">
             {idx + 1}
           </span>

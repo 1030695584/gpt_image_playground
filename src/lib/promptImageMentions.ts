@@ -156,7 +156,7 @@ export function getPromptMentionParts(prompt: string, inputImages: InputImage[])
 }
 
 export function replaceImageMentionsForApi(prompt: string, imageCount?: number, formatImage?: (index: number) => string): string {
-  return prompt.replace(SELECTED_IMAGE_MENTION_RE, (text, n) => {
+  return expandImageCommentMentions(prompt).replace(SELECTED_IMAGE_MENTION_RE, (text, n) => {
     const index = Number(n) - 1
     if (imageCount != null && (index < 0 || index >= imageCount)) return stripImageMentionMarkers(text)
     return formatImage ? formatImage(index) : `[image ${n}]`
@@ -212,7 +212,7 @@ export function upsertImageCommentMention(prompt: string, index: number, comment
   return `${prompt.slice(0, at)}${getImageCommentMention(index, comments)}${prompt.slice(at)}`
 }
 
-/** 提交前把评论胶囊展开为普通图片提及加评论列表，任务记录与接口请求都使用展开后的文本 */
+/** 把评论胶囊展开为普通图片提及加评论列表；任务中保存原始胶囊以便复用，发送请求和展示时再展开 */
 export function expandImageCommentMentions(prompt: string) {
   return prompt.replace(IMAGE_COMMENT_MENTION_RE, (text, n, data, offset: number, whole: string) => {
     const comments = parseImageComments(data)
@@ -226,4 +226,9 @@ export function expandImageCommentMentions(prompt: string) {
     const after = end < whole.length && whole[end] !== '\n' ? '\n' : ''
     return `${before}${block}${after}`
   })
+}
+
+/** 任务卡片、详情、搜索等展示用的纯文本：评论胶囊展开，并去掉提及标记 */
+export function getPromptDisplayText(prompt: string) {
+  return stripImageMentionMarkers(expandImageCommentMentions(prompt))
 }

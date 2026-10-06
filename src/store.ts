@@ -24,7 +24,7 @@ import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
 import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, mergeImportedSettings, mergePresetImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPresetProviderIds, isPresetConfigDeletionPrevented, isPresetConfigOnlyEnabled, isPresetConfigParamsLocked, isPresetProfile, isPresetProviderDeletionPrevented } from './lib/presetConfig'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
-import { expandImageCommentMentions, remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
+import { getPromptDisplayText, remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
   getAllTasks,
   putTask as dbPutTask,
@@ -1156,7 +1156,7 @@ export function taskMatchesFilterStatus(task: TaskRecord, filterStatus: AppState
 export function taskMatchesSearchQuery(task: TaskRecord, query: string) {
   const q = query.trim().toLowerCase()
   if (!q) return true
-  const prompt = (task.prompt || '').toLowerCase()
+  const prompt = getPromptDisplayText(task.prompt || '').toLowerCase()
   const paramStr = JSON.stringify(task.params).toLowerCase()
   const errorStr = [task.error, ...(task.outputErrors ?? []).map((item) => item.error)].filter(Boolean).join('\n').toLowerCase()
   return prompt.includes(q) || paramStr.includes(q) || errorStr.includes(q)
@@ -1651,9 +1651,8 @@ export async function initStore() {
 
 /** 提交新任务 */
 export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean } = {}) {
-  const { settings, prompt: rawPrompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
+  const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
     useStore.getState()
-  const prompt = expandImageCommentMentions(rawPrompt)
 
   const normalizedSettings = normalizeSettings(settings)
   let activeProfile = getActiveApiProfile(settings)
@@ -1959,7 +1958,7 @@ async function generateAgentConversationTitle(
 
     updateAgentConversation(conversationId, (current) => {
       const firstRound = current.rounds[0]
-      if (!firstRound || firstRound.prompt !== prompt || current.title !== fallbackTitle) return current
+      if (!firstRound || getPromptDisplayText(firstRound.prompt) !== prompt || current.title !== fallbackTitle) return current
       return { ...current, title, updatedAt: Date.now() }
     })
   } catch {
@@ -2305,8 +2304,7 @@ async function continueRecoveredAgentRound(taskId: string) {
 
 export async function submitAgentMessage() {
   const state = useStore.getState()
-  const { settings, inputImages, maskDraft, params, showToast } = state
-  const prompt = expandImageCommentMentions(state.prompt)
+  const { settings, prompt, inputImages, maskDraft, params, showToast } = state
   const normalizedSettings = normalizeSettings(settings)
 
   const agentValidationError = getAgentProfileValidationError(normalizedSettings)
@@ -2416,7 +2414,7 @@ export async function submitAgentMessage() {
 
   let fallbackTitle: string | null = null
   updateAgentConversation(conversation.id, (current) => {
-    const nextTitle = current.rounds.length === 0 ? createAgentConversationTitle(trimmedPrompt, current.title) : current.title
+    const nextTitle = current.rounds.length === 0 ? createAgentConversationTitle(getPromptDisplayText(trimmedPrompt), current.title) : current.title
     if (current.rounds.length === 0) fallbackTitle = nextTitle
     const messages = shouldAppendToEditingRound
       ? current.messages.some((message) => message.id === userMessageId)
@@ -2448,7 +2446,7 @@ export async function submitAgentMessage() {
   state.setAgentEditingRoundId(null)
 
   if (fallbackTitle) {
-    void generateAgentConversationTitle(conversation.id, trimmedPrompt, inputImageIds, requestSettings, activeProfile, fallbackTitle)
+    void generateAgentConversationTitle(conversation.id, getPromptDisplayText(trimmedPrompt), inputImageIds, requestSettings, activeProfile, fallbackTitle)
   }
 
   void executeAgentRound(conversation.id, roundId, normalizedParams, requestSettings, activeProfile, imageProfile)

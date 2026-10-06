@@ -1,5 +1,6 @@
 import type { AgentConversation, AgentMessage, AgentRound, ResponsesOutputItem, TaskRecord } from '../types'
 import { getAgentRoundPath } from './agentConversationState'
+import { getPromptDisplayText } from './promptImageMentions'
 import {
   collectAgentRoundOutputImageSlots,
   getAgentCurrentReferenceId,
@@ -64,7 +65,7 @@ function escapeXmlAttribute(value: string) {
 }
 
 function createGeneratedImageReferencePart(round: AgentRound, task: TaskRecord, imageIndex: number) {
-  const prompt = (typeof task.prompt === 'string' ? task.prompt : '').replace(/\s+/g, ' ').trim()
+  const prompt = getPromptDisplayText(typeof task.prompt === 'string' ? task.prompt : '').replace(/\s+/g, ' ').trim()
   const truncatedPrompt = prompt.length > 1200 ? `${prompt.slice(0, 1200)}...` : prompt
   const promptAttribute = truncatedPrompt ? ` prompt="${escapeXmlAttribute(truncatedPrompt)}"` : ''
   return {

@@ -1,9 +1,13 @@
 import { useRef } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { SketchComment, SketchPoint } from '../lib/sketch'
+import { COMMENT_PIN_SIZE, CommentPin } from './CommentMarks'
+import { TooltipButton } from './TooltipButton'
+import { CheckIcon } from './editor/EditorControls'
+import { TrashIcon } from './icons'
 
-const PIN_SIZE = 28
-const EDITOR_WIDTH = 240
+const EDITOR_WIDTH = 280
+const EDITOR_HEIGHT = 44
 
 /**
  * 画板评论气泡层：气泡按屏幕像素固定大小，不随画布缩放；
@@ -22,6 +26,7 @@ export default function SketchCommentLayer({
   onOpen,
   onChangeText,
   onFinish,
+  onDelete,
 }: {
   comments: SketchComment[]
   activeId: string | null
@@ -37,6 +42,7 @@ export default function SketchCommentLayer({
   onOpen: (id: string) => void
   onChangeText: (id: string, text: string) => void
   onFinish: () => void
+  onDelete: (id: string) => void
 }) {
   // offsetX / offsetY 为按下点相对气泡尖角（评论坐标）的偏移，拖动时保持不变，气泡不会跳到指针下
   const dragRef = useRef<{ id: string; startX: number; startY: number; offsetX: number; offsetY: number; moved: boolean } | null>(null)
@@ -82,42 +88,65 @@ export default function SketchCommentLayer({
       {comments.map((comment, idx) => {
         const { x, y } = getPosition(comment)
         return (
-          <div
+          <CommentPin
             key={comment.id}
-            className={`absolute z-10 flex touch-none select-none items-center justify-center rounded-full rounded-bl-[4px] text-xs font-semibold text-white shadow-md ring-2 ring-white transition-colors dark:ring-gray-900 ${
-              comment.id === activeId ? 'bg-blue-600' : 'bg-blue-500'
-            }`}
-            style={{ left: x, top: y - PIN_SIZE, width: PIN_SIZE, height: PIN_SIZE, cursor: canOpen ? 'pointer' : 'grab' }}
+            index={idx}
+            active={comment.id === activeId}
+            className="absolute z-10 touch-none"
+            style={{ left: x, top: y - COMMENT_PIN_SIZE, cursor: canOpen ? 'pointer' : 'grab' }}
             onPointerDown={(event) => handlePointerDown(event, comment.id)}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
-          >
-            {idx + 1}
-          </div>
+          />
         )
       })}
-      {/* 只渲染一个输入框，切换评论时复用同一元素，避免卸载触发失焦把新打开的评论关掉 */}
+      {/* 只渲染一个编辑框，切换评论时复用同一元素，避免卸载触发失焦把新打开的评论关掉 */}
       {active && activePosition && (
-        <input
-          autoFocus
-          value={active.text}
-          placeholder="添加评论…"
-          aria-label={`评论 ${activeIndex + 1}`}
-          onChange={(event) => onChangeText(active.id, event.target.value)}
-          onBlur={onFinish}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.nativeEvent.isComposing) event.currentTarget.blur()
-          }}
-          onPointerDown={(event) => event.stopPropagation()}
-          className="absolute z-20 h-9 rounded-full border border-gray-200/80 bg-white/95 px-4 text-sm text-gray-800 shadow-lg outline-none backdrop-blur-md placeholder:text-gray-400 focus:border-blue-400 dark:border-white/[0.08] dark:bg-gray-800/95 dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:border-blue-400/60"
+        <div
+          className="absolute z-20 flex items-center gap-1 rounded-full border border-gray-200/80 bg-white/95 p-1 shadow-lg backdrop-blur-md focus-within:border-blue-400 dark:border-white/[0.08] dark:bg-gray-800/95 dark:focus-within:border-blue-400/60"
           style={{
             // 与气泡垂直居中对齐，右侧放不下时改到气泡左侧
-            left: activePosition.x + PIN_SIZE + 8 + EDITOR_WIDTH > boundsRight ? activePosition.x - EDITOR_WIDTH - 8 : activePosition.x + PIN_SIZE + 8,
-            top: activePosition.y - PIN_SIZE / 2 - 18,
+            left: activePosition.x + COMMENT_PIN_SIZE + 8 + EDITOR_WIDTH > boundsRight ? activePosition.x - EDITOR_WIDTH - 8 : activePosition.x + COMMENT_PIN_SIZE + 8,
+            top: activePosition.y - COMMENT_PIN_SIZE / 2 - EDITOR_HEIGHT / 2,
             width: EDITOR_WIDTH,
+            height: EDITOR_HEIGHT,
           }}
-        />
+          onPointerDown={(event) => event.stopPropagation()}
+          // 点击两侧按钮时不让输入框失焦，由按钮自己决定删除或收起
+          onMouseDown={(event) => {
+            if (!(event.target instanceof HTMLInputElement)) event.preventDefault()
+          }}
+        >
+          <TooltipButton
+            tooltip="删除评论"
+            wrapperClassName="relative inline-flex flex-none"
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100 text-gray-500 transition hover:bg-red-50 hover:text-red-500 dark:bg-white/[0.08] dark:text-gray-300 dark:hover:bg-red-500/15 dark:hover:text-red-400"
+            onClick={() => onDelete(active.id)}
+          >
+            <TrashIcon className="h-4 w-4" />
+          </TooltipButton>
+          <input
+            autoFocus
+            value={active.text}
+            placeholder="添加评论…"
+            aria-label={`评论 ${activeIndex + 1}`}
+            onChange={(event) => onChangeText(active.id, event.target.value)}
+            onBlur={onFinish}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.nativeEvent.isComposing) event.currentTarget.blur()
+            }}
+            className="min-w-0 flex-1 bg-transparent px-1.5 text-sm text-gray-800 outline-none placeholder:text-gray-400 dark:text-gray-100 dark:placeholder:text-gray-500"
+          />
+          <TooltipButton
+            tooltip="完成"
+            wrapperClassName="relative inline-flex flex-none"
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-500 text-white shadow-sm transition hover:bg-blue-600"
+            onClick={onFinish}
+          >
+            <CheckIcon />
+          </TooltipButton>
+        </div>
       )}
     </>
   )

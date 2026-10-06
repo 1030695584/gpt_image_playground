@@ -1054,6 +1054,10 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
                 onOpen={openComment}
                 onChangeText={(id, text) => setComments((items) => items.map((comment) => comment.id === id ? { ...comment, text } : comment))}
                 onFinish={finishComment}
+                onDelete={(id) => {
+                  setComments((items) => items.filter((comment) => comment.id !== id))
+                  setActiveCommentId(null)
+                }}
               />
             </div>
           )}

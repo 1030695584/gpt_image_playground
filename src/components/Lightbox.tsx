@@ -1,10 +1,13 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
+import type { ImageComment } from '../types'
 import { createInputImageFromFile, deleteImageIfUnreferenced, useStore } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { suppressGlobalClicks } from '../lib/clickSuppression'
 import { ensureImageCached, getCachedImage } from '../lib/imageCache'
+import { getImageComments } from '../lib/promptImageMentions'
+import { CommentPin } from './CommentMarks'
 import { EditIcon, RefreshIcon } from './icons'
 
 const MIN_SCALE = 1
@@ -27,6 +30,8 @@ export default function Lightbox() {
   const maskDraft = useStore((s) => s.maskDraft)
   const tasks = useStore((s) => s.tasks)
   const inputImages = useStore((s) => s.inputImages)
+  const prompt = useStore((s) => s.prompt)
+  const detailTaskId = useStore((s) => s.detailTaskId)
   const replaceInputImage = useStore((s) => s.replaceInputImage)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
   const setSketchBoard = useStore((s) => s.setSketchBoard)
@@ -264,10 +269,19 @@ export default function Lightbox() {
 
   if (!lightboxImageId || !src) return null
 
+  // 在任务详情中查看参考图时取该任务提示词里的评论，否则取当前输入中的评论
+  const detailTask = detailTaskId ? tasks.find((task) => task.id === detailTaskId) : undefined
+  const detailIdx = detailTask ? detailTask.inputImageIds.indexOf(lightboxImageId) : -1
+  const inputIdx = inputImages.findIndex((img) => img.id === lightboxImageId)
+  const comments = detailTask && detailIdx >= 0
+    ? getImageComments(detailTask.prompt, detailIdx)
+    : inputIdx >= 0 ? getImageComments(prompt, inputIdx) : []
+
   return (
     <>
       <LightboxInner
         src={src}
+        comments={comments}
         imageId={lightboxImageId}
         maskPreviewSrc={maskPreviewSrc}
         onClose={close}
@@ -293,6 +307,7 @@ export default function Lightbox() {
 
 interface LightboxInnerProps {
   src: string
+  comments: ImageComment[]
   imageId: string
   maskPreviewSrc?: string
   onClose: () => void
@@ -307,7 +322,7 @@ interface LightboxInnerProps {
 }
 
 /** 内部组件：保证挂载时 DOM 已经存在，所有 ref / effect 都可靠 */
-function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, currentIndex, total, onPrev, onNext, showInputActions, onReplace, onEdit }: LightboxInnerProps) {
+function LightboxInner({ src, comments, imageId, maskPreviewSrc, onClose, showNav, currentIndex, total, onPrev, onNext, showInputActions, onReplace, onEdit }: LightboxInnerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const openedAtRef = useRef(Date.now())
 
@@ -773,6 +788,25 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
               alt=""
             />
           )}
+          {comments.map((comment, idx) => (
+            // 气泡尖角落在评论位置，并抵消外层缩放，保持屏幕上的大小不变
+            <div
+              key={idx}
+              className="pointer-events-none absolute flex items-end gap-1.5"
+              style={{
+                left: `${comment.x * 100}%`,
+                bottom: `${(1 - comment.y) * 100}%`,
+                transform: `scale(${1 / s})`,
+                transformOrigin: '0 100%',
+                transition: isDragging ? 'none' : 'transform 0.2s ease-out',
+              }}
+            >
+              <CommentPin index={idx} className="flex-none" />
+              <span className="w-max max-w-[16rem] break-words rounded-2xl bg-white/95 px-3 py-1.5 text-xs leading-snug text-gray-800 shadow-md backdrop-blur-sm dark:bg-gray-800/95 dark:text-gray-100">
+                {comment.text}
+              </span>
+            </div>
+          ))}
         </div>
       </div>
 
