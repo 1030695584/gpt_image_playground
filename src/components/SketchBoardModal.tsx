@@ -880,6 +880,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     return {
       left: viewRect.left + parseFloat(style.paddingLeft) - frameRect.left,
       right: viewRect.right - parseFloat(style.paddingRight) - frameRect.left,
+      top: viewRect.top - frameRect.top,
       bottom: viewRect.bottom - frameRect.top,
     }
   }

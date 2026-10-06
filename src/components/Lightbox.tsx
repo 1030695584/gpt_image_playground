@@ -335,7 +335,7 @@ function LightboxInner({ src, comments, imageId, maskPreviewSrc, onClose, showNa
   const [hiddenComments, setHiddenComments] = useState<{ imageId: string; indexes: number[] }>({ imageId, indexes: [] })
   // 渲染期间发现图片已切换就直接重置，避免切回原图时沿用旧的收起状态，也不会闪一帧
   if (hiddenComments.imageId !== imageId) setHiddenComments({ imageId, indexes: [] })
-  const hiddenCommentIndexes = hiddenComments.imageId === imageId ? hiddenComments.indexes : []
+  const hiddenCommentIndexes = hiddenComments.indexes
   const toggleComment = (idx: number) => {
     setHiddenComments({
       imageId,

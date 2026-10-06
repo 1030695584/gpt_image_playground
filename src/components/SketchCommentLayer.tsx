@@ -13,6 +13,7 @@ const EDITOR_GAP = 8
 export interface CommentEditorBounds {
   left: number
   right: number
+  top: number
   bottom: number
 }
 
@@ -22,14 +23,15 @@ export interface CommentEditorBounds {
  */
 function getEditorPosition(x: number, y: number, bounds: CommentEditorBounds) {
   const width = Math.min(EDITOR_WIDTH, bounds.right - bounds.left)
-  const centerTop = y - COMMENT_PIN_SIZE / 2 - EDITOR_HEIGHT / 2
+  const clampTop = (top: number) => Math.min(Math.max(top, bounds.top), bounds.bottom - EDITOR_HEIGHT)
+  const centerTop = clampTop(y - COMMENT_PIN_SIZE / 2 - EDITOR_HEIGHT / 2)
   const rightLeft = x + COMMENT_PIN_SIZE + EDITOR_GAP
   if (rightLeft + width <= bounds.right) return { left: rightLeft, top: centerTop, width }
   const leftLeft = x - EDITOR_GAP - width
   if (leftLeft >= bounds.left) return { left: leftLeft, top: centerTop, width }
   const left = Math.min(Math.max(x + COMMENT_PIN_SIZE / 2 - width / 2, bounds.left), bounds.right - width)
   const below = y + EDITOR_GAP
-  return { left, top: below + EDITOR_HEIGHT <= bounds.bottom ? below : y - COMMENT_PIN_SIZE - EDITOR_GAP - EDITOR_HEIGHT, width }
+  return { left, top: clampTop(below + EDITOR_HEIGHT <= bounds.bottom ? below : y - COMMENT_PIN_SIZE - EDITOR_GAP - EDITOR_HEIGHT), width }
 }
 
 /**
