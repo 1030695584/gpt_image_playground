@@ -1,15 +1,82 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ApiProfile, TaskParams } from '../../types'
+import type { ApiProfile, AppSettings, BatchPromptMode, TaskParams } from '../../types'
+import { DEFAULT_BATCH_PROMPT_CONCURRENCY, normalizeBatchPromptConcurrency } from '../../lib/batchPrompts'
 import { dismissAllTooltips } from '../../lib/tooltipDismiss'
-import { ChevronDownIcon } from '../icons'
 import Select from '../Select'
 import ButtonTooltip from './buttonTooltip'
+import ParamPopoverChip from './paramPopoverChip'
 
 const CHIP_CLASS = 'h-8 px-3.5 rounded-full bg-black/[0.04] dark:bg-white/[0.06] hover:bg-black/[0.07] dark:hover:bg-white/[0.1] text-xs text-gray-700 dark:text-gray-200 transition-colors duration-200 focus:outline-none'
 const CHIP_DISABLED_CLASS = 'h-8 px-3.5 rounded-full bg-black/[0.03] dark:bg-white/[0.04] opacity-50 cursor-not-allowed text-xs text-gray-700 dark:text-gray-200'
 const ROW_CLASS = 'relative flex items-center justify-between gap-3'
 const ROW_LABEL_CLASS = 'text-gray-500 dark:text-gray-400'
 const CONTROL_DISABLED_CLASS = 'px-3 py-1.5 rounded-xl border border-transparent dark:border-transparent bg-black/[0.04] dark:bg-white/[0.04] opacity-50 cursor-not-allowed text-xs transition-all duration-200 '
+
+type BatchSettingsPatch = Partial<Pick<AppSettings, 'batchPromptEnabled' | 'batchPromptMode' | 'batchPromptConcurrencyLimited' | 'batchPromptConcurrency'>>
+
+function Switch({ checked, disabled, label, onToggle }: { checked: boolean; disabled?: boolean; label: string; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      disabled={disabled}
+      className={`relative inline-flex h-4 w-7 flex-shrink-0 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${checked ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+    >
+      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+    </button>
+  )
+}
+
+/** 并发数输入框：随弹层挂载，打开时从已保存的值初始化，聚焦输入时实时提示过高的并发数 */
+function ConcurrencyInput({ value, disabled, onCommit }: { value: number; disabled: boolean; onCommit: (value: number) => void }) {
+  const [input, setInput] = useState(String(value))
+  const [focused, setFocused] = useState(false)
+  const latestRef = useRef({ input, value, onCommit })
+  latestRef.current = { input, value, onCommit }
+
+  // 直接关闭弹层时输入框被卸载而不会触发 blur，卸载时补一次提交
+  useEffect(() => () => {
+    const latest = latestRef.current
+    const next = normalizeBatchPromptConcurrency(Number(latest.input))
+    if (next !== latest.value) latest.onCommit(next)
+  }, [])
+
+  const commit = () => {
+    const next = normalizeBatchPromptConcurrency(Number(input))
+    setInput(String(next))
+    if (next !== value) onCommit(next)
+  }
+
+  return (
+    <>
+      <input
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => {
+          setFocused(false)
+          commit()
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur()
+        }}
+        disabled={disabled}
+        type="number"
+        min={1}
+        className={`w-28 px-3 py-1.5 rounded-xl border border-transparent focus:border-blue-300 dark:focus:border-blue-500/50 focus:outline-none text-xs transition-all duration-200 ${
+          disabled ? 'bg-black/[0.03] dark:bg-white/[0.04] opacity-50 cursor-not-allowed' : 'bg-black/[0.04] dark:bg-white/[0.06]'
+        }`}
+      />
+      <ButtonTooltip
+        visible={focused && Number(input) > DEFAULT_BATCH_PROMPT_CONCURRENCY}
+        text={`并发数超过 ${DEFAULT_BATCH_PROMPT_CONCURRENCY} 可能导致浏览器卡顿或触发服务商限流`}
+      />
+    </>
+  )
+}
 
 interface HintTooltipState {
   visible: boolean
@@ -60,6 +127,15 @@ export default function InputParamsPanel({
   sizeHint,
   qualityHint,
   onOpenSizePicker,
+  showBatch,
+  batchEnabled,
+  batchMode,
+  batchConcurrencyLimited,
+  batchConcurrency,
+  batchPromptCount,
+  batchProgress,
+  onBatchChange,
+  onStopBatch,
 }: {
   params: TaskParams
   setParams: (patch: Partial<TaskParams>) => void
@@ -101,10 +177,16 @@ export default function InputParamsPanel({
   sizeHint: HintTooltipState
   qualityHint: HintTooltipState
   onOpenSizePicker: () => void
+  showBatch: boolean
+  batchEnabled: boolean
+  batchMode: BatchPromptMode
+  batchConcurrencyLimited: boolean
+  batchConcurrency: number
+  batchPromptCount: number
+  batchProgress: { total: number; finished: number; stopping: boolean } | null
+  onBatchChange: (patch: BatchSettingsPatch) => void
+  onStopBatch: () => void
 }) {
-  const [moreOpen, setMoreOpen] = useState(false)
-  const moreButtonRef = useRef<HTMLButtonElement>(null)
-  const morePanelRef = useRef<HTMLDivElement>(null)
   // 折叠时也展示弹层内每一项的当前值，不支持的参数不显示
   const moreSummary = [
     params.output_format.toUpperCase(),
@@ -115,26 +197,14 @@ export default function InputParamsPanel({
   ].filter(Boolean).join(' · ')
   const prefix = (text: string) => <span className="mr-1.5 text-gray-400 dark:text-gray-500">{text}</span>
 
-  useEffect(() => {
-    if (!moreOpen) return
-    const handlePointerDown = (e: PointerEvent) => {
-      const target = e.target as Node
-      if (!morePanelRef.current?.contains(target) && !moreButtonRef.current?.contains(target)) setMoreOpen(false)
-    }
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMoreOpen(false)
-    }
-    document.addEventListener('pointerdown', handlePointerDown)
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown)
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [moreOpen])
+  const batchSummary = batchProgress
+    ? batchProgress.stopping ? '停止中' : `${batchProgress.finished}/${batchProgress.total}`
+    : batchEnabled ? `${batchPromptCount} 条` : undefined
 
   return (
-    <div className="flex flex-1 flex-wrap items-center gap-2 min-w-0 text-xs">
-      <div className="min-w-0 max-w-full sm:max-w-[14rem] max-sm:flex-auto">
+    <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2 min-w-0 text-xs">
+      {/* 极小的收缩权重：先截断“更多”的摘要，放不下时才压缩模型 ID */}
+      <div className="min-w-0 max-w-full sm:shrink-[0.01] max-sm:flex-auto">
         <Select
           value={activeProfile.model}
           onChange={(val) => onModelChange(String(val))}
@@ -145,7 +215,7 @@ export default function InputParamsPanel({
         />
       </div>
       <div
-        className="relative max-sm:flex-auto"
+        className="relative max-sm:flex-auto sm:shrink-0"
         onMouseEnter={sizeHint.show}
         onMouseLeave={sizeHint.hide}
         onTouchStart={sizeHint.startTouch}
@@ -169,7 +239,7 @@ export default function InputParamsPanel({
         />
       </div>
       <div
-        className="relative max-sm:flex-auto"
+        className="relative max-sm:flex-auto sm:shrink-0"
         onMouseEnter={qualityHint.show}
         onMouseLeave={qualityHint.hide}
         onTouchStart={qualityHint.startTouch}
@@ -194,7 +264,7 @@ export default function InputParamsPanel({
         />
       </div>
       <label
-        className={`relative flex items-center max-sm:flex-auto ${agentAutoImageCount ? CHIP_DISABLED_CLASS : `${CHIP_CLASS} cursor-text`}`}
+        className={`relative flex items-center max-sm:flex-auto sm:shrink-0 ${agentAutoImageCount ? CHIP_DISABLED_CLASS : `${CHIP_CLASS} cursor-text`}`}
         onMouseEnter={() => { showAgentNHint(); streamConcurrentHint.show() }}
         onMouseLeave={() => { hideNLimitHint(); streamConcurrentHint.hide() }}
         onTouchStart={() => { startAgentNHintTouch(); streamConcurrentHint.startTouch() }}
@@ -235,23 +305,7 @@ export default function InputParamsPanel({
         <ButtonTooltip visible={nLimitHint.visible} text={nLimitHintText} />
         <ButtonTooltip visible={streamConcurrentByN && streamConcurrentHint.visible && !nLimitHint.visible} text="数量大于 1 时会将多图生成拆分为并发单图" />
       </label>
-      <div className="relative min-w-0 max-sm:flex-auto">
-        <button
-          ref={moreButtonRef}
-          type="button"
-          onClick={() => { dismissAllTooltips(); setMoreOpen((open) => !open) }}
-          aria-expanded={moreOpen}
-          className={`flex w-full items-center gap-1 min-w-0 ${CHIP_CLASS} ${moreOpen ? '!bg-black/[0.07] dark:!bg-white/[0.1]' : ''}`}
-        >
-          <span className="flex-shrink-0">更多</span>
-          <span className="flex-1 truncate text-left text-gray-400 dark:text-gray-500">· {moreSummary}</span>
-          <ChevronDownIcon className={`w-3.5 h-3.5 flex-shrink-0 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${moreOpen ? 'rotate-180' : ''}`} />
-        </button>
-        {moreOpen && (
-          <div
-            ref={morePanelRef}
-            className="absolute bottom-full left-0 z-40 mb-2 flex w-60 flex-col gap-2 rounded-xl border border-transparent bg-white/95 p-3 shadow-[0_8px_30px_rgb(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur-xl animate-dropdown-up dark:border-transparent dark:bg-gray-800/95 dark:shadow-[0_8px_30px_rgb(0,0,0,0.4)] dark:ring-white/[0.06]"
-          >
+      <ParamPopoverChip label="更多" summary={moreSummary} className="sm:min-w-[5rem]">
             <div className={ROW_CLASS}>
               <span className={ROW_LABEL_CLASS}>格式</span>
               <div className="w-28">
@@ -369,9 +423,83 @@ export default function InputParamsPanel({
                 text="fal.ai 不支持审核参数"
               />
             </div>
+      </ParamPopoverChip>
+      {showBatch && (
+        <ParamPopoverChip label="批量" summary={batchSummary} active={batchEnabled || Boolean(batchProgress)} className="sm:shrink-0">
+          <div className={ROW_CLASS}>
+            <span className={ROW_LABEL_CLASS}>多提示词批量提交</span>
+            <Switch
+              checked={batchEnabled}
+              disabled={Boolean(batchProgress)}
+              label="多提示词批量提交"
+              onToggle={() => onBatchChange({ batchPromptEnabled: !batchEnabled })}
+            />
           </div>
-        )}
-      </div>
+          {batchEnabled && (
+            <>
+              <div className={ROW_CLASS}>
+                <span className={ROW_LABEL_CLASS}>执行方式</span>
+                <div className="w-28">
+                  <Select
+                    value={batchMode}
+                    onChange={(val) => onBatchChange({ batchPromptMode: val as BatchPromptMode })}
+                    options={[
+                      { label: '排队', value: 'queue' },
+                      { label: '并发', value: 'concurrent' },
+                    ]}
+                    disabled={Boolean(batchProgress)}
+                    className={batchProgress ? CONTROL_DISABLED_CLASS : selectClass}
+                  />
+                </div>
+              </div>
+              {batchMode === 'concurrent' && (
+                <div className={ROW_CLASS}>
+                  <span className={ROW_LABEL_CLASS}>限制并发数</span>
+                  <Switch
+                    checked={batchConcurrencyLimited}
+                    disabled={Boolean(batchProgress)}
+                    label="限制并发数"
+                    onToggle={() => onBatchChange({ batchPromptConcurrencyLimited: !batchConcurrencyLimited })}
+                  />
+                </div>
+              )}
+              {batchMode === 'concurrent' && batchConcurrencyLimited && (
+                <label className={ROW_CLASS}>
+                  <span className={ROW_LABEL_CLASS}>并发数</span>
+                  <ConcurrencyInput
+                    value={batchConcurrency}
+                    disabled={Boolean(batchProgress)}
+                    onCommit={(value) => onBatchChange({ batchPromptConcurrency: value })}
+                  />
+                </label>
+              )}
+              {batchMode === 'concurrent' && !batchConcurrencyLimited && (
+                <p className="rounded-lg bg-amber-500/[0.1] px-2.5 py-2 text-[11px] leading-relaxed text-amber-700 dark:bg-amber-500/[0.14] dark:text-amber-400/90">
+                  不限制并发时会同时发出全部请求，提示词较多时可能导致浏览器卡顿甚至崩溃，也容易触发服务商限流。
+                </p>
+              )}
+              <p className="text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
+                提示词之间空两行分隔，当前共 {batchPromptCount} 条；参考图和参数对每条提示词都生效。
+              </p>
+            </>
+          )}
+          {batchProgress && (
+            <div className={ROW_CLASS}>
+              <span className={ROW_LABEL_CLASS}>
+                已完成 {batchProgress.finished} / {batchProgress.total}
+              </span>
+              <button
+                type="button"
+                onClick={onStopBatch}
+                disabled={batchProgress.stopping}
+                className="rounded-xl bg-red-500/[0.12] px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-500/[0.18] disabled:cursor-not-allowed disabled:opacity-50 dark:bg-red-500/[0.18] dark:text-red-400/90 dark:hover:bg-red-500/[0.25]"
+              >
+                {batchProgress.stopping ? '停止中…' : '停止批量'}
+              </button>
+            </div>
+          )}
+        </ParamPopoverChip>
+      )}
     </div>
   )
 }

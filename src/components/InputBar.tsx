@@ -1,11 +1,12 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, removeMultipleTasks, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
+import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImageFromFile, removeMultipleTasks, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
 import { DEFAULT_PARAMS, MAX_INPUT_IMAGES, type TaskRecord } from '../types'
 import { getActiveAgentRounds } from '../lib/agentConversationState'
 import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings, resolveApiProfileModel, splitModelList } from '../lib/apiProfiles'
 import { getImageGenerationModel, isGptImage25Model } from '../lib/imageModels'
 import { ensureImageCached, getCachedImage } from '../lib/imageCache'
+import { splitBatchPrompts } from '../lib/batchPrompts'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { getAtImageQuery, getImageComments, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { normalizeCodexCliImageSize, normalizeImageSize } from '../lib/size'
@@ -94,6 +95,7 @@ export default function InputBar() {
   const params = useStore((s) => s.params)
   const setParams = useStore((s) => s.setParams)
   const setSettings = useStore((s) => s.setSettings)
+  const batchProgress = useStore((s) => s.batchProgress)
   const settings = useStore((s) => s.settings)
   const reusedTaskApiProfileId = useStore((s) => s.reusedTaskApiProfileId)
   const setShowSettings = useStore((s) => s.setShowSettings)
@@ -450,7 +452,12 @@ export default function InputBar() {
     ? maskDraft ? '遮罩编辑' : '生成图像'
     : '请先配置 API'
   const submitTooltipText = activeAgentIsRunning ? '停止生成' : '尚未完成 API 配置，请在右上角设置中进行'
-  const promptPlaceholder = '描述你想生成的图片，可输入 @ 来指定参考图...'
+  const showBatch = appMode === 'gallery' && settings.showBatchPrompt
+  const batchEnabled = showBatch && settings.batchPromptEnabled
+  const batchPromptCount = useMemo(() => batchEnabled ? splitBatchPrompts(prompt).length : 0, [batchEnabled, prompt])
+  const promptPlaceholder = batchEnabled
+    ? '每条提示词之间空两行分隔，可输入 @ 来指定参考图...'
+    : '描述你想生成的图片，可输入 @ 来指定参考图...'
   const submitCurrentMode = useCallback(() => {
     if (appMode === 'agent') {
       void submitAgentMessage()
@@ -1613,7 +1620,7 @@ export default function InputBar() {
 
   const renderImageThumbs = () => {
     return (
-      <div ref={imagesRef}>
+      <div ref={imagesRef} className="sm:[contain:inline-size]">
         <div className="grid grid-cols-[repeat(auto-fill,52px)] justify-between gap-x-2 gap-y-3 mb-3">
           {inputImages.map((img, idx) => renderImageThumb(img, idx))}
           {renderClearAllButton()}
@@ -1673,6 +1680,15 @@ export default function InputBar() {
       sizeHint={sizeHint}
       qualityHint={qualityHint}
       onOpenSizePicker={() => setShowSizePicker(true)}
+      showBatch={showBatch}
+      batchEnabled={batchEnabled}
+      batchMode={settings.batchPromptMode}
+      batchConcurrencyLimited={settings.batchPromptConcurrencyLimited}
+      batchConcurrency={settings.batchPromptConcurrency}
+      batchPromptCount={batchPromptCount}
+      batchProgress={batchProgress}
+      onBatchChange={setSettings}
+      onStopBatch={stopBatchPrompts}
     />
   )
 
@@ -1695,26 +1711,29 @@ export default function InputBar() {
 
       <div
         data-input-bar
-        className={`fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl px-3 sm:px-4 transition-all duration-300${promptExpanded ? ' flex flex-col' : ''}`}
+        className={`fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl sm:w-max sm:min-w-[min(56rem,100%)] sm:max-w-[min(80rem,100%)] px-3 sm:px-4 transition-all duration-300${promptExpanded ? ' flex flex-col' : ''}`}
         style={promptExpanded ? { top: `${promptExpandedTop}px`, transitionProperty: 'none' } : undefined}
       >
-        <InputBatchBars
-          showFavoriteCollectionBatchBar={showFavoriteCollectionBatchBar}
-          showTaskBatchBar={showTaskBatchBar}
-          selectedTaskIds={selectedTaskIds}
-          tasks={tasks}
-          clearFavoriteCollectionSelection={clearFavoriteCollectionSelection}
-          onSelectAllVisibleFavoriteCollections={handleSelectAllVisibleFavoriteCollections}
-          onInvertVisibleFavoriteCollections={handleInvertVisibleFavoriteCollections}
-          onDownloadSelectedFavoriteCollections={handleDownloadSelectedFavoriteCollections}
-          onDeleteSelectedFavoriteCollections={handleDeleteSelectedFavoriteCollections}
-          clearSelection={clearSelection}
-          onSelectAllVisibleTasks={handleSelectAllVisibleTasks}
-          onInvertVisibleTasks={handleInvertVisibleTasks}
-          onToggleFavorite={handleToggleFavorite}
-          onDownloadSelected={handleDownloadSelected}
-          onDeleteSelected={handleDeleteSelected}
-        />
+        {/* 桌面端输入栏宽度只由参数栏内容决定（最宽与任务卡片区域对齐），其余区域用 contain 排除在宽度计算之外 */}
+        <div className="sm:[contain:inline-size]">
+          <InputBatchBars
+            showFavoriteCollectionBatchBar={showFavoriteCollectionBatchBar}
+            showTaskBatchBar={showTaskBatchBar}
+            selectedTaskIds={selectedTaskIds}
+            tasks={tasks}
+            clearFavoriteCollectionSelection={clearFavoriteCollectionSelection}
+            onSelectAllVisibleFavoriteCollections={handleSelectAllVisibleFavoriteCollections}
+            onInvertVisibleFavoriteCollections={handleInvertVisibleFavoriteCollections}
+            onDownloadSelectedFavoriteCollections={handleDownloadSelectedFavoriteCollections}
+            onDeleteSelectedFavoriteCollections={handleDeleteSelectedFavoriteCollections}
+            clearSelection={clearSelection}
+            onSelectAllVisibleTasks={handleSelectAllVisibleTasks}
+            onInvertVisibleTasks={handleInvertVisibleTasks}
+            onToggleFavorite={handleToggleFavorite}
+            onDownloadSelected={handleDownloadSelected}
+            onDeleteSelected={handleDeleteSelected}
+          />
+        </div>
         <div ref={cardRef} className={`bg-white/70 dark:bg-gray-900/70 backdrop-blur-2xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] rounded-2xl sm:rounded-3xl p-3 sm:p-4 ring-1 ring-black/5 dark:ring-white/10${promptExpanded ? ' flex min-h-0 flex-1 flex-col' : ''}`}>
           {/* 移动端拖动条 */}
           <div
@@ -1752,7 +1771,7 @@ export default function InputBar() {
           )}
 
           {/* 输入框 */}
-          <div className={`relative grid${promptExpanded ? ' min-h-0 flex-1' : ''}`}>
+          <div className={`relative grid sm:[contain:inline-size]${promptExpanded ? ' min-h-0 flex-1' : ''}`}>
             {showAtImageMenu && (
               <div style={{ left: `${menuLeft}px` }} className="absolute bottom-full z-50 mb-2 w-64 overflow-hidden rounded-2xl border border-transparent bg-white/95 p-1.5 shadow-xl ring-1 ring-black/5 backdrop-blur-xl dark:border-transparent dark:bg-gray-800/95 dark:ring-white/[0.06]">
                 <div className="px-2 pb-1 pt-0.5 text-[11px] text-gray-400 dark:text-gray-500">选择图片引用</div>
@@ -1964,7 +1983,7 @@ export default function InputBar() {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                       </svg>
                     )}
-                    {activeAgentIsRunning ? '停止生成' : maskDraft ? '遮罩编辑' : '生成图像'}
+                    {activeAgentIsRunning ? '停止生成' : maskDraft ? '遮罩编辑' : batchEnabled ? `批量生成 ${batchPromptCount} 条` : '生成图像'}
                   </button>
                 </div>
               </div>

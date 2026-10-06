@@ -23,6 +23,7 @@ import { normalizeReasoningEffort, normalizeStreamPartialImages, parseDefaultApi
 import { readRuntimeEnv } from './runtimeEnv'
 import { isImportableConfigUrl } from './importableConfigUrl'
 import { DEFAULT_IMAGES_MODEL } from './imageModels'
+import { DEFAULT_BATCH_PROMPT_CONCURRENCY, normalizeBatchPromptConcurrency } from './batchPrompts'
 
 const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1'
 const RAW_DEFAULT_API_URL = readRuntimeEnv(import.meta.env.VITE_DEFAULT_API_URL)
@@ -731,6 +732,11 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     allowPromptRewrite: typeof record.allowPromptRewrite === 'boolean' ? record.allowPromptRewrite : false,
     taskCompletionNotification: typeof record.taskCompletionNotification === 'boolean' ? record.taskCompletionNotification : false,
     enterSubmit: typeof record.enterSubmit === 'boolean' ? record.enterSubmit : false,
+    showBatchPrompt: typeof record.showBatchPrompt === 'boolean' ? record.showBatchPrompt : false,
+    batchPromptEnabled: typeof record.batchPromptEnabled === 'boolean' ? record.batchPromptEnabled : false,
+    batchPromptMode: record.batchPromptMode === 'concurrent' ? 'concurrent' : 'queue',
+    batchPromptConcurrencyLimited: typeof record.batchPromptConcurrencyLimited === 'boolean' ? record.batchPromptConcurrencyLimited : true,
+    batchPromptConcurrency: normalizeBatchPromptConcurrency(record.batchPromptConcurrency),
     referenceImageEditAction: normalizeReferenceImageEditAction(record.referenceImageEditAction),
     zipDownloadRoutes: normalizeZipDownloadRoutes(record.zipDownloadRoutes),
     agentScrollToBottomAfterSubmit: typeof record.agentScrollToBottomAfterSubmit === 'boolean' ? record.agentScrollToBottomAfterSubmit : true,
@@ -1307,6 +1313,11 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   allowPromptRewrite: false,
   taskCompletionNotification: false,
   enterSubmit: false,
+  showBatchPrompt: false,
+  batchPromptEnabled: false,
+  batchPromptMode: 'queue',
+  batchPromptConcurrencyLimited: true,
+  batchPromptConcurrency: DEFAULT_BATCH_PROMPT_CONCURRENCY,
   referenceImageEditAction: 'ask',
   zipDownloadRoutes: DEFAULT_ZIP_DOWNLOAD_ROUTES,
   agentScrollToBottomAfterSubmit: true,

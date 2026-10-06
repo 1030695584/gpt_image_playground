@@ -57,6 +57,7 @@ import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
+import { runWithConcurrency, splitBatchPrompts } from './lib/batchPrompts'
 import { createTransparentOutputMeta, getTransparentRequestParams, removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
 import { blobToDataUrl, fileToDataUrl } from './lib/dataUrl'
 import { cacheImage, cacheThumbnail, clearImageCaches, deleteCachedImage, deleteImageCacheEntry, ensureImageCached, scheduleThumbnailBackfill } from './lib/imageCache'
@@ -322,6 +323,9 @@ interface AppState {
   reusedTaskApiProfileName: string | null
   reusedTaskApiProfileMissing: boolean
   setReusedTaskApiProfile: (profileId: string | null, missing?: boolean, profileName?: string | null) => void
+  /** 正在进行的批量提交进度，仅保存在内存中 */
+  batchProgress: { total: number; finished: number; stopping: boolean } | null
+  setBatchProgress: (progress: AppState['batchProgress']) => void
 
   // Agent
   agentConversations: AgentConversation[]
@@ -784,6 +788,8 @@ export const useStore = create<AppState>()(
         reusedTaskApiProfileName: profileName,
         reusedTaskApiProfileMissing: missing,
       }),
+      batchProgress: null,
+      setBatchProgress: (batchProgress) => set({ batchProgress }),
 
       // Agent
       agentConversations: [],
@@ -1704,6 +1710,12 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     return
   }
 
+  const batchPrompts = normalizedSettings.showBatchPrompt && normalizedSettings.batchPromptEnabled ? splitBatchPrompts(prompt) : []
+  if (batchPrompts.length && useStore.getState().batchProgress) {
+    showToast('批量任务进行中，请等待完成或停止后再提交', 'error')
+    return
+  }
+
   let orderedInputImages = inputImages
   let maskImageId: string | null = null
   let maskTargetImageId: string | null = null
@@ -1746,41 +1758,50 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   const taskParams = shouldUseTransparentOutput
     ? getTransparentRequestParams(normalizedParams)
     : { ...normalizedParams, transparent_output: false }
-  const transparentMeta = taskParams.transparent_output && activeProfile.transparentBackgroundMethod === 'local'
-    ? createTransparentOutputMeta(prompt.trim())
-    : null
   const normalizedParamPatch = getChangedParams(params, taskParams)
   if (Object.keys(normalizedParamPatch).length) {
     useStore.getState().setParams(normalizedParamPatch)
   }
 
-  const taskId = genId()
-  const task: TaskRecord = {
-    id: taskId,
-    prompt: prompt.trim(),
-    params: taskParams,
-    apiProvider: activeProfile.provider,
-    apiProfileId: activeProfile.id,
-    apiProfileName: activeProfile.name,
-    apiMode: activeProfile.apiMode,
-    apiModel: activeProfile.model,
-    inputImageIds: orderedInputImages.map((i) => i.id),
-    maskTargetImageId,
-    maskImageId,
-    transparentOutput: transparentMeta?.transparentOutput,
-    transparentPrompt: transparentMeta?.effectivePrompt,
-    outputImages: [],
-    status: 'running',
-    error: null,
-    createdAt: Date.now(),
-    finishedAt: null,
-    elapsed: null,
+  const startTask = async (taskPrompt: string) => {
+    const transparentMeta = taskParams.transparent_output && activeProfile.transparentBackgroundMethod === 'local'
+      ? createTransparentOutputMeta(taskPrompt)
+      : null
+    const task: TaskRecord = {
+      id: genId(),
+      prompt: taskPrompt,
+      params: taskParams,
+      apiProvider: activeProfile.provider,
+      apiProfileId: activeProfile.id,
+      apiProfileName: activeProfile.name,
+      apiMode: activeProfile.apiMode,
+      apiModel: activeProfile.model,
+      inputImageIds: orderedInputImages.map((i) => i.id),
+      maskTargetImageId,
+      maskImageId,
+      transparentOutput: transparentMeta?.transparentOutput,
+      transparentPrompt: transparentMeta?.effectivePrompt,
+      outputImages: [],
+      status: 'running',
+      error: null,
+      createdAt: Date.now(),
+      finishedAt: null,
+      elapsed: null,
+    }
+
+    useStore.getState().setTasks([task, ...useStore.getState().tasks])
+    await putTask(task)
+    // 异步调用 API
+    executeTask(task.id)
+    return task.id
   }
 
-  const latestTasks = useStore.getState().tasks
-  useStore.getState().setTasks([task, ...latestTasks])
-  await putTask(task)
-  useStore.getState().showToast('任务已提交', 'success')
+  if (batchPrompts.length) {
+    useStore.getState().showToast(`已开始批量提交 ${batchPrompts.length} 条提示词`, 'success')
+  } else {
+    await startTask(prompt.trim())
+    useStore.getState().showToast('任务已提交', 'success')
+  }
 
   if (settings.clearInputAfterSubmit) {
     useStore.getState().setPrompt('')
@@ -1788,8 +1809,58 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   }
   useStore.getState().setReusedTaskApiProfile(null)
 
-  // 异步调用 API
-  executeTask(taskId)
+  if (batchPrompts.length) {
+    const limit = normalizedSettings.batchPromptMode === 'queue'
+      ? 1
+      : normalizedSettings.batchPromptConcurrencyLimited ? normalizedSettings.batchPromptConcurrency : batchPrompts.length
+    await runBatchPrompts(batchPrompts, limit, startTask)
+  }
+}
+
+/** 等待任务结束（完成、失败或被删除），用于批量提交时控制排队与并发；断线待恢复的任务也视为结束，避免卡住队列 */
+function waitForTaskSettled(taskId: string) {
+  const isSettled = (tasks: TaskRecord[]) => tasks.find((item) => item.id === taskId)?.status !== 'running'
+  return new Promise<void>((resolve) => {
+    if (isSettled(useStore.getState().tasks)) {
+      resolve()
+      return
+    }
+    const unsubscribe = useStore.subscribe((state) => {
+      if (!isSettled(state.tasks)) return
+      unsubscribe()
+      resolve()
+    })
+  })
+}
+
+async function runBatchPrompts(prompts: string[], limit: number, startTask: (taskPrompt: string) => Promise<string>) {
+  const { setBatchProgress } = useStore.getState()
+  let started = 0
+  let finished = 0
+  setBatchProgress({ total: prompts.length, finished, stopping: false })
+  await runWithConcurrency(prompts, limit, async (taskPrompt) => {
+    started += 1
+    try {
+      await waitForTaskSettled(await startTask(taskPrompt))
+    } catch (err) {
+      console.error('批量提交任务失败', err)
+    }
+    finished += 1
+    const progress = useStore.getState().batchProgress
+    setBatchProgress({ total: prompts.length, finished, stopping: progress?.stopping ?? false })
+  }, () => Boolean(useStore.getState().batchProgress?.stopping))
+  const stopped = Boolean(useStore.getState().batchProgress?.stopping)
+  setBatchProgress(null)
+  useStore.getState().showToast(
+    stopped ? `已停止批量提交，共提交 ${started} / ${prompts.length} 条` : `批量提交完成，共 ${prompts.length} 条`,
+    'success',
+  )
+}
+
+/** 停止批量提交：不再启动新的提示词，已开始的任务继续执行 */
+export function stopBatchPrompts() {
+  const progress = useStore.getState().batchProgress
+  if (progress) useStore.getState().setBatchProgress({ ...progress, stopping: true })
 }
 
 function getActiveAgentConversation(): AgentConversation {
@@ -3733,7 +3804,8 @@ async function executeTask(taskId: string) {
         falRecoverable: false,
         customRecoverable: false,
       })
-      useStore.getState().setDetailTaskId(taskId)
+      // 批量提交期间不自动打开失败详情，避免连续弹窗打断
+      if (!useStore.getState().batchProgress) useStore.getState().setDetailTaskId(taskId)
     }
   } finally {
     // 释放输入图片的内存缓存（已持久化到 IndexedDB，后续按需从 DB 加载）
