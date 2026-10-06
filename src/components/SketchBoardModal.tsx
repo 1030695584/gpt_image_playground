@@ -34,6 +34,7 @@ import {
   snapToAngle,
   transformElement,
   type SketchBounds,
+  type SketchComment,
   type SketchElement,
   type SketchEraseStroke,
   type SketchHandle,
@@ -70,6 +71,11 @@ import {
 import { CloseIcon } from './icons'
 
 type EndpointHandle = 'start' | 'end'
+
+interface HistoryEntry {
+  elements: SketchElement[]
+  comments: SketchComment[]
+}
 
 type Gesture =
   | { kind: 'draw'; pointerId: number; el: SketchPathElement }
@@ -159,8 +165,9 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
   const swatchesRef = useRef<HTMLDivElement>(null)
   const shapeMenuRef = useRef<HTMLDivElement>(null)
   const gestureRef = useRef<Gesture | null>(null)
-  const undoRef = useRef<SketchElement[][]>([])
-  const redoRef = useRef<SketchElement[][]>([])
+  // 撤销历史同时记录笔画与评论，只在本次打开期间保留
+  const undoRef = useRef<HistoryEntry[]>([])
+  const redoRef = useRef<HistoryEntry[]>([])
   const editingRef = useRef<SketchTextElement | null>(null)
   const widthBeforeRef = useRef<SketchElement[] | null>(null)
   const colorBeforeRef = useRef<SketchElement[] | null>(null)
@@ -206,8 +213,11 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     finishComment,
     openComment,
     removeComment,
+    moveComment,
+    finishMove,
+    restoreComments,
     saveComments,
-  } = useSketchComments(replaceImageId)
+  } = useSketchComments(replaceImageId, (before) => pushHistory(elements, before))
 
   const viewport = useEditorViewport(frameRef, viewRef, Boolean(docSize))
   const customColorTooltip = useTooltip()
@@ -362,8 +372,8 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     setHistoryVersion((v) => v + 1)
   }
 
-  function pushHistory(before: SketchElement[]) {
-    undoRef.current.push(before)
+  function pushHistory(before: SketchElement[], beforeComments = comments) {
+    undoRef.current.push({ elements: before, comments: beforeComments })
     if (undoRef.current.length > MAX_HISTORY) undoRef.current.shift()
     redoRef.current = []
     syncHistory()
@@ -378,8 +388,9 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     commitCustomColor()
     const previous = undoRef.current.pop()
     if (!previous) return
-    redoRef.current.push(elements)
-    setElements(previous)
+    redoRef.current.push({ elements, comments })
+    setElements(previous.elements)
+    restoreComments(previous.comments)
     setSelectedId(null)
     syncHistory()
   }
@@ -388,8 +399,9 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     commitCustomColor()
     const next = redoRef.current.pop()
     if (!next) return
-    undoRef.current.push(elements)
-    setElements(next)
+    undoRef.current.push({ elements, comments })
+    setElements(next.elements)
+    restoreComments(next.comments)
     setSelectedId(null)
     syncHistory()
   }
@@ -427,7 +439,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [elements, selectedId, isSaving])
+  }, [elements, comments, selectedId, isSaving])
 
   function toDocPoint(event: { clientX: number; clientY: number }): SketchPoint {
     const rect = canvasRef.current!.getBoundingClientRect()
@@ -1040,7 +1052,8 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
                   : Infinity}
                 canOpen={tool === 'comment'}
                 toDocPoint={toDocPoint}
-                onMove={(id, x, y) => updateComment(id, { x, y })}
+                onMove={moveComment}
+                onMoveEnd={finishMove}
                 onOpen={openComment}
                 onChangeText={(id, text) => updateComment(id, { text })}
                 onFinish={finishComment}

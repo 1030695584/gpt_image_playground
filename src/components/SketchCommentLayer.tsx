@@ -23,6 +23,7 @@ export default function SketchCommentLayer({
   canOpen,
   toDocPoint,
   onMove,
+  onMoveEnd,
   onOpen,
   onChangeText,
   onFinish,
@@ -39,6 +40,7 @@ export default function SketchCommentLayer({
   canOpen: boolean
   toDocPoint: (event: { clientX: number; clientY: number }) => SketchPoint
   onMove: (id: string, x: number, y: number) => void
+  onMoveEnd: () => void
   onOpen: (id: string) => void
   onChangeText: (id: string, text: string) => void
   onFinish: () => void
@@ -72,7 +74,8 @@ export default function SketchCommentLayer({
     event.stopPropagation()
     dragRef.current = null
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-    if (!drag.moved && canOpen) onOpen(drag.id)
+    if (drag.moved) onMoveEnd()
+    else if (canOpen) onOpen(drag.id)
   }
 
   const activeIndex = comments.findIndex((comment) => comment.id === activeId)
