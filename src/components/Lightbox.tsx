@@ -820,9 +820,10 @@ function LightboxInner({ src, comments, imageId, maskPreviewSrc, onClose, showNa
               >
                 <CommentPin index={idx} />
               </button>
-              <span className={`absolute bottom-0 ${hiddenCommentIndexes.includes(idx) ? 'hidden' : ''} w-max max-w-[18rem] whitespace-pre-wrap break-words rounded-xl border border-gray-200/80 bg-white/95 px-3 py-2 text-sm leading-snug text-gray-800 shadow-lg backdrop-blur-md dark:border-white/[0.08] dark:bg-gray-800/95 dark:text-gray-100 ${
-                comment.x > 0.6 ? 'right-full mr-1.5' : 'left-full ml-1.5'
-              }`}>
+              {/* 收起时向气泡一侧缩小淡出 */}
+              <span className={`absolute bottom-0 w-max max-w-[18rem] whitespace-pre-wrap break-words rounded-xl border border-gray-200/80 bg-white/95 px-3 py-2 text-sm leading-snug text-gray-800 shadow-lg backdrop-blur-md transition-[opacity,transform] duration-150 ease-out dark:border-white/[0.08] dark:bg-gray-800/95 dark:text-gray-100 ${
+                comment.x > 0.6 ? 'right-full mr-1.5 origin-bottom-right' : 'left-full ml-1.5 origin-bottom-left'
+              } ${hiddenCommentIndexes.includes(idx) ? 'scale-75 opacity-0' : 'scale-100 opacity-100'}`}>
                 {comment.text}
               </span>
             </div>
