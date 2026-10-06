@@ -11,7 +11,7 @@ import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { downloadImageEntriesAsZip, downloadImageIds, getImageZipEntries } from '../lib/downloadImages'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
-import { getImageComments, getPromptDisplayText, replaceImageMentionsForApi } from '../lib/promptImageMentions'
+import { getImageComments, getTaskPromptText, replaceImageMentionsForApi } from '../lib/promptImageMentions'
 import { getApiProviderLabel } from '../lib/apiProfiles'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
 
@@ -329,7 +329,7 @@ export default function DetailModal() {
   const handleCopyPrompt = async () => {
     if (!task.prompt) return
     try {
-      await copyTextToClipboard(getPromptDisplayText(task.prompt))
+      await copyTextToClipboard(getTaskPromptText(task.prompt, task.inputImageIds.length))
       showToast('提示词已复制', 'success')
     } catch (err) {
       showToast(getClipboardFailureMessage('复制提示词失败', err), 'error')
@@ -883,7 +883,7 @@ export default function DetailModal() {
               </div>
             ) : (
               <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap mb-4">
-                {getPromptDisplayText(task.prompt) || '(无提示词)'}
+                {getTaskPromptText(task.prompt, task.inputImageIds.length) || '(无提示词)'}
               </p>
             )}
             {showRevisedPrompt && currentRevisedPrompt && (

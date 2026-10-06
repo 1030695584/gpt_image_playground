@@ -219,7 +219,7 @@ export function expandImageCommentMentions(prompt: string) {
     if (!comments.length) return ''
     const percent = (value: number) => `${Math.round(value * 100)}%`
     const lines = comments.map((comment, idx) => `${idx + 1}. (X=${percent(comment.x)}, Y=${percent(comment.y)}) ${comment.text}`)
-    const block = `${getSelectedImageMentionLabel(Number(n) - 1)} 中的评论标注（坐标为相对该图宽高的百分比）：\n${lines.join('\n')}`
+    const block = `Comments on ${getSelectedImageMentionLabel(Number(n) - 1)} (X/Y are percentages of the image width/height):\n${lines.join('\n')}`
     // 评论块独占成段，与前后文本及其他图片的评论块用换行分隔
     const end = offset + text.length
     const before = offset > 0 && whole[offset - 1] !== '\n' ? '\n' : ''
@@ -231,4 +231,9 @@ export function expandImageCommentMentions(prompt: string) {
 /** 任务卡片、详情、搜索等展示用的纯文本：评论胶囊展开，并去掉提及标记 */
 export function getPromptDisplayText(prompt: string) {
   return stripImageMentionMarkers(expandImageCommentMentions(prompt))
+}
+
+/** 任务卡片、详情等直接展示实际发送给接口的提示词原文：图片提及换成 [image N]，评论胶囊展开 */
+export function getTaskPromptText(prompt: string, imageCount: number) {
+  return stripImageMentionMarkers(replaceImageMentionsForApi(prompt, imageCount))
 }

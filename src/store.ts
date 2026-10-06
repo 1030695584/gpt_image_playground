@@ -24,7 +24,7 @@ import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
 import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, mergeImportedSettings, mergePresetImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPresetProviderIds, isPresetConfigDeletionPrevented, isPresetConfigOnlyEnabled, isPresetConfigParamsLocked, isPresetProfile, isPresetProviderDeletionPrevented } from './lib/presetConfig'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
-import { getPromptDisplayText, remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
+import { getPromptDisplayText, getTaskPromptText, remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
   getAllTasks,
   putTask as dbPutTask,
@@ -1156,7 +1156,7 @@ export function taskMatchesFilterStatus(task: TaskRecord, filterStatus: AppState
 export function taskMatchesSearchQuery(task: TaskRecord, query: string) {
   const q = query.trim().toLowerCase()
   if (!q) return true
-  const prompt = getPromptDisplayText(task.prompt || '').toLowerCase()
+  const prompt = getTaskPromptText(task.prompt || '', task.inputImageIds.length).toLowerCase()
   const paramStr = JSON.stringify(task.params).toLowerCase()
   const errorStr = [task.error, ...(task.outputErrors ?? []).map((item) => item.error)].filter(Boolean).join('\n').toLowerCase()
   return prompt.includes(q) || paramStr.includes(q) || errorStr.includes(q)

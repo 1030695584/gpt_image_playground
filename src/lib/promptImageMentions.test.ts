@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { InputImage } from '../types'
-import { expandImageCommentMentions, getAtImageQuery, getImageCommentMention, getImageComments, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, insertImageMention, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, remapImageMentionsForOrder, replaceImageMentionsForApi, stripImageMentionMarkers, upsertImageCommentMention } from './promptImageMentions'
+import { expandImageCommentMentions, getAtImageQuery, getImageCommentMention, getImageComments, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getTaskPromptText, getSelectedTextMentionLabel, insertImageMention, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, remapImageMentionsForOrder, replaceImageMentionsForApi, stripImageMentionMarkers, upsertImageCommentMention } from './promptImageMentions'
 
 const images: InputImage[] = [
   { id: 'image-a', dataUrl: 'data:image/png;base64,a' },
@@ -162,14 +162,19 @@ describe('prompt image mentions', () => {
       const prompt = `把背景换掉${getImageCommentMention(0, comments)}${getImageCommentMention(1, [comments[1]])}`
       expect(stripImageMentionMarkers(expandImageCommentMentions(prompt))).toBe([
         '把背景换掉',
-        '@图1 中的评论标注（坐标为相对该图宽高的百分比）：',
+        'Comments on @图1 (X/Y are percentages of the image width/height):',
         '1. (X=52%, Y=41%) 改成红色 "引号"',
         '2. (X=10%, Y=80%) 删除',
         '',
-        '@图2 中的评论标注（坐标为相对该图宽高的百分比）：',
+        'Comments on @图2 (X/Y are percentages of the image width/height):',
         '1. (X=10%, Y=80%) 删除',
       ].join('\n'))
-      expect(replaceImageMentionsForApi(expandImageCommentMentions(getImageCommentMention(0, comments)), 1)).toContain('[image 1] 中的评论标注')
+      expect(replaceImageMentionsForApi(expandImageCommentMentions(getImageCommentMention(0, comments)), 1)).toContain('Comments on [image 1]')
+    })
+
+    it('shows the exact request text for task records', () => {
+      const prompt = `参考 ${getSelectedImageMentionLabel(0)} ${getImageCommentMention(0, [comments[1]])}`
+      expect(getTaskPromptText(prompt, 1)).toBe('参考 [image 1] \nComments on [image 1] (X/Y are percentages of the image width/height):\n1. (X=10%, Y=80%) 删除')
     })
   })
 })
