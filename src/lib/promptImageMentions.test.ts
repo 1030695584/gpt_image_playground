@@ -145,19 +145,27 @@ describe('prompt image mentions', () => {
     it('inserts a comment mention right before an existing mention without breaking it', () => {
       const prompt = `abc${getSelectedImageMentionLabel(0)} tail`
       for (const [cursor, before] of [[3, 'abc'], [0, '']] as const) {
-        const next = upsertImageCommentMention(cursor === 0 ? `${getSelectedImageMentionLabel(0)} tail` : prompt, 1, comments, cursor)
+        const next = upsertImageCommentMention(cursor === 0 ? `${getSelectedImageMentionLabel(0)} tail` : prompt, 1, comments, cursor).prompt
         expect(next).toBe(`${before}${getImageCommentMention(1, comments)}${getSelectedImageMentionLabel(0)} tail`)
       }
     })
 
+    it('replaces the selected mention and returns the cursor after the new comment mention', () => {
+      const prompt = `前${getSelectedImageMentionLabel(0)}后`
+      const result = upsertImageCommentMention(prompt, 1, comments, 1, 4)
+      expect(result.prompt).toBe(`前${getImageCommentMention(1, comments)}后`)
+      expect(result.cursor).toBe(7)
+      expect(upsertImageCommentMention(result.prompt, 1, comments.slice(1), 0, 8).cursor).toBeNull()
+    })
+
     it('inserts, replaces and removes the comment mention of an image', () => {
-      const inserted = upsertImageCommentMention('前后', 0, comments, 1)
+      const inserted = upsertImageCommentMention('前后', 0, comments, 1).prompt
       expect(stripImageMentionMarkers(inserted)).toBe('前@图1 评论后')
-      const replaced = upsertImageCommentMention(inserted, 0, comments.slice(1), 0)
+      const replaced = upsertImageCommentMention(inserted, 0, comments.slice(1), 0).prompt
       expect(getImageComments(replaced, 0)).toEqual(comments.slice(1))
       expect(stripImageMentionMarkers(replaced)).toBe('前@图1 评论后')
-      expect(upsertImageCommentMention(replaced, 0, [], 0)).toBe('前后')
-      expect(stripImageMentionMarkers(upsertImageCommentMention('文本', 1, comments, Infinity))).toBe('文本@图2 评论')
+      expect(upsertImageCommentMention(replaced, 0, [], 0)).toEqual({ prompt: '前后', cursor: null })
+      expect(stripImageMentionMarkers(upsertImageCommentMention('文本', 1, comments, Infinity).prompt)).toBe('文本@图2 评论')
     })
 
     it('follows image reordering and disappears with the removed image', () => {

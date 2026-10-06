@@ -30,8 +30,7 @@ export default function Lightbox() {
   const maskDraft = useStore((s) => s.maskDraft)
   const tasks = useStore((s) => s.tasks)
   const inputImages = useStore((s) => s.inputImages)
-  const prompt = useStore((s) => s.prompt)
-  const detailTaskId = useStore((s) => s.detailTaskId)
+  const lightboxCommentPrompt = useStore((s) => s.lightboxCommentPrompt)
   const replaceInputImage = useStore((s) => s.replaceInputImage)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
   const setSketchBoard = useStore((s) => s.setSketchBoard)
@@ -141,8 +140,8 @@ export default function Lightbox() {
   const goTo = useCallback((idx: number) => {
     if (lightboxImageList.length === 0) return
     const wrapped = ((idx % lightboxImageList.length) + lightboxImageList.length) % lightboxImageList.length
-    setLightboxImageId(lightboxImageList[wrapped], lightboxImageList)
-  }, [lightboxImageList, setLightboxImageId])
+    setLightboxImageId(lightboxImageList[wrapped], lightboxImageList, lightboxCommentPrompt)
+  }, [lightboxCommentPrompt, lightboxImageList, setLightboxImageId])
 
   const goPrev = useCallback(() => { if (showNav) goTo(currentIndex - 1) }, [showNav, currentIndex, goTo])
   const goNext = useCallback(() => { if (showNav) goTo(currentIndex + 1) }, [showNav, currentIndex, goTo])
@@ -187,12 +186,12 @@ export default function Lightbox() {
 
       replaceInputImage(targetIdx, image)
       const nextList = lightboxImageList.map((id) => id === targetId ? image.id : id)
-      setLightboxImageId(image.id, nextList)
+      setLightboxImageId(image.id, nextList, lightboxCommentPrompt)
       showToast('参考图已替换', 'success')
     } catch (err) {
       showToast(`参考图替换失败：${err instanceof Error ? err.message : String(err)}`, 'error')
     }
-  }, [lightboxImageList, replaceInputImage, setLightboxImageId, showToast])
+  }, [lightboxCommentPrompt, lightboxImageList, replaceInputImage, setLightboxImageId, showToast])
 
   const editInputImage = useCallback(() => {
     if (!lightboxImageId || !isInputImage || !src) return
@@ -269,15 +268,8 @@ export default function Lightbox() {
 
   if (!lightboxImageId || !src) return null
 
-  // 在任务详情中查看参考图时取该任务提示词里的评论；从输入栏打开时取当前草稿的评论；
-  // 其他入口（如 Agent 消息）无法确定对应哪次发送，不显示评论
-  const detailTask = detailTaskId ? tasks.find((task) => task.id === detailTaskId) : undefined
-  const detailIdx = detailTask ? detailTask.inputImageIds.indexOf(lightboxImageId) : -1
-  const isFromInputBar = lightboxImageList.length === inputImages.length && inputImages.every((img, idx) => img.id === lightboxImageList[idx])
-  const inputIdx = isFromInputBar ? inputImages.findIndex((img) => img.id === lightboxImageId) : -1
-  const comments = detailTask && detailIdx >= 0
-    ? getImageComments(detailTask.prompt, detailIdx)
-    : inputIdx >= 0 ? getImageComments(prompt, inputIdx) : []
+  // 打开预览的入口（输入栏、任务详情、Agent 消息）会传入对应的提示词，图片在列表中的位置即其序号
+  const comments = lightboxCommentPrompt != null && currentIndex >= 0 ? getImageComments(lightboxCommentPrompt, currentIndex) : []
 
   return (
     <>

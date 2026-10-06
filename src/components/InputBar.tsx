@@ -1114,8 +1114,8 @@ export default function InputBar() {
 
       const range = getContentEditableSelection(el)
       setCursorPos(range.start)
-      // 记到 store 中，画板等弹窗关闭后可把评论胶囊插回这里
-      useStore.getState().setPromptCursor(range.start)
+      // 记到 store 中，画板等弹窗关闭后可把评论胶囊插回这里，并覆盖选中的内容
+      useStore.getState().setPromptSelection(range)
       syncMentionTagSelection(el)
 
       const rangeRect = domRange.getBoundingClientRect()
@@ -1405,16 +1405,19 @@ export default function InputBar() {
         onContextMenu={(e) => {
           e.preventDefault()
           const el = textareaRef.current
-          const cursor = el ? getContentEditableCursor(el) : prompt.length
+          // 按输入框最后的选区插入，选中了其他内容（包括胶囊）时直接覆盖
+          const visibleLength = stripImageMentionMarkers(prompt).length
+          const recorded = useStore.getState().promptSelection
+          const selection = recorded?.prompt === prompt ? recorded : { start: visibleLength, end: visibleLength }
           if (el) {
             el.focus()
-            setContentEditableCursor(el, cursor)
+            setContentEditableSelection(el, selection.start, selection.end)
             if (document.execCommand('insertHTML', false, getMentionTagHtml(getImageMentionLabel(idx)))) {
               syncPromptFromContentEditable()
               return
             }
           }
-          const next = insertImageMentionAtVisibleRange(prompt, cursor, cursor, idx)
+          const next = insertImageMentionAtVisibleRange(prompt, selection.start, selection.end, idx)
           isUserInputRef.current = false
           setPrompt(next.prompt)
           window.setTimeout(() => {
@@ -1443,7 +1446,7 @@ export default function InputBar() {
           }`}
           onClick={() => {
             if (suppressImageClickRef.current) return
-            setLightboxImageId(img.id, inputImages.map((i) => i.id))
+            setLightboxImageId(img.id, inputImages.map((i) => i.id), prompt)
           }}
         >
           {displaySrc && (
@@ -1468,7 +1471,7 @@ export default function InputBar() {
             className="absolute inset-0 w-full h-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer z-20 focus:outline-none border-none"
             onClick={(e) => {
               e.stopPropagation()
-              setLightboxImageId(img.id, inputImages.map((i) => i.id))
+              setLightboxImageId(img.id, inputImages.map((i) => i.id), prompt)
             }}
             title="查看"
             aria-label="查看参考图"

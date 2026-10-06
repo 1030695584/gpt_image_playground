@@ -200,18 +200,24 @@ export function getImageComments(prompt: string, index: number): ImageComment[] 
 
 /**
  * 更新某张图片的评论胶囊：已有胶囊则原地替换，评论为空时移除；
- * 没有胶囊时插入到可见文本偏移 visibleCursor 处（超出范围则追加到末尾）。
+ * 没有胶囊时替换可见文本区间 [visibleStart, visibleEnd)，即插入到光标处并覆盖选中内容（超出范围则追加到末尾）。
  */
-export function upsertImageCommentMention(prompt: string, index: number, comments: ImageComment[], visibleCursor: number) {
+export function upsertImageCommentMention(prompt: string, index: number, comments: ImageComment[], visibleStart: number, visibleEnd = visibleStart) {
   let found = false
   const next = prompt.replace(IMAGE_COMMENT_MENTION_RE, (text, n) => {
     if (Number(n) - 1 !== index || found) return text
     found = true
     return comments.length ? getImageCommentMention(index, comments) : ''
   })
-  if (found || !comments.length) return next
-  const at = getPromptIndexFromVisibleIndex(prompt, visibleCursor)
-  return `${prompt.slice(0, at)}${getImageCommentMention(index, comments)}${prompt.slice(at)}`
+  if (found || !comments.length) return { prompt: next, cursor: null }
+  const start = getPromptIndexFromVisibleIndex(prompt, visibleStart)
+  const end = getPromptIndexFromVisibleIndex(prompt, visibleEnd)
+  const mention = getImageCommentMention(index, comments)
+  return {
+    prompt: `${prompt.slice(0, start)}${mention}${prompt.slice(end)}`,
+    // 新插入时返回胶囊之后的可见偏移，供调用方更新光标
+    cursor: stripImageMentionMarkers(prompt.slice(0, start) + mention).length,
+  }
 }
 
 /** 把评论胶囊展开为普通图片提及加评论列表；任务中保存原始胶囊以便复用，发送请求和展示时再展开 */

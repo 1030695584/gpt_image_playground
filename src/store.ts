@@ -295,9 +295,12 @@ interface AppState {
   // 输入
   prompt: string
   setPrompt: (p: string) => void
-  /** 输入框最后一次的光标位置（可见文本偏移），供画板等外部入口插入胶囊；未聚焦过时为 null */
-  promptCursor: number | null
-  setPromptCursor: (cursor: number) => void
+  /**
+   * 输入框最后一次的选区（可见文本偏移），供画板等外部入口插入胶囊并覆盖选中内容；未聚焦过时为 null。
+   * 同时记下当时的提示词，提示词被其他途径替换后选区即失效，使用前需比对。
+   */
+  promptSelection: { start: number; end: number; prompt: string } | null
+  setPromptSelection: (selection: { start: number; end: number }) => void
   inputImages: InputImage[]
   addInputImage: (img: InputImage) => void
   replaceInputImage: (idx: number, img: InputImage) => void
@@ -388,7 +391,9 @@ interface AppState {
   setDetailTaskId: (id: string | null) => void
   lightboxImageId: string | null
   lightboxImageList: string[]
-  setLightboxImageId: (id: string | null, list?: string[]) => void
+  /** 预览参考图时对应的提示词，按图片在列表中的位置取其评论；为空时不显示评论 */
+  lightboxCommentPrompt: string | null
+  setLightboxImageId: (id: string | null, list?: string[], commentPrompt?: string | null) => void
   /** 画板；baseImageSrc 为画布底图，replaceImageId 为完成后要替换的参考图 */
   sketchBoard: SketchBoardRequest | null
   setSketchBoard: (board: SketchBoardRequest | null) => void
@@ -688,8 +693,8 @@ export const useStore = create<AppState>()(
       // Input
       prompt: '',
       setPrompt: (prompt) => set((s) => syncActiveInputDraft(s, { prompt })),
-      promptCursor: null,
-      setPromptCursor: (promptCursor) => set({ promptCursor }),
+      promptSelection: null,
+      setPromptSelection: (selection) => set((s) => ({ promptSelection: { ...selection, prompt: s.prompt } })),
       inputImages: [],
       addInputImage: (img) =>
         set((s) => {
@@ -983,9 +988,14 @@ export const useStore = create<AppState>()(
       },
       lightboxImageId: null,
       lightboxImageList: [],
-      setLightboxImageId: (lightboxImageId, list) => {
+      lightboxCommentPrompt: null,
+      setLightboxImageId: (lightboxImageId, list, commentPrompt = null) => {
         if (lightboxImageId) dismissAllTooltips()
-        set({ lightboxImageId, lightboxImageList: list ?? (lightboxImageId ? [lightboxImageId] : []) })
+        set({
+          lightboxImageId,
+          lightboxImageList: list ?? (lightboxImageId ? [lightboxImageId] : []),
+          lightboxCommentPrompt: lightboxImageId ? commentPrompt : null,
+        })
       },
       sketchBoard: null,
       setSketchBoard: (sketchBoard) => {

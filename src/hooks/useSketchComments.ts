@@ -49,13 +49,17 @@ export function useSketchComments(replaceImageId?: string) {
   }
 
   /**
-   * 把评论写入提示词中第 idx 张参考图的评论胶囊：已有则原地更新，否则插到输入框光标处。
+   * 把评论写入提示词中第 idx 张参考图的评论胶囊：已有则原地更新，否则插到输入框光标处（有选区时替换选中内容）。
    * merge 为 true 时保留该图原有评论，用于导出结果与已有参考图相同的情况。
    */
   const saveComments = (idx: number, merge = false) => {
     const latest = useStore.getState()
     const next = merge ? [...getImageComments(latest.prompt, idx), ...commentData] : commentData
-    latest.setPrompt(upsertImageCommentMention(latest.prompt, idx, next, latest.promptCursor ?? Infinity))
+    const selection = latest.promptSelection?.prompt === latest.prompt ? latest.promptSelection : { start: Infinity, end: Infinity }
+    const result = upsertImageCommentMention(latest.prompt, idx, next, selection.start, selection.end)
+    latest.setPrompt(result.prompt)
+    // 输入框不在焦点上不会同步选区，手动移到新胶囊之后，避免下次插入仍按旧选区覆盖
+    if (result.cursor != null) latest.setPromptSelection({ start: result.cursor, end: result.cursor })
   }
 
   return {
