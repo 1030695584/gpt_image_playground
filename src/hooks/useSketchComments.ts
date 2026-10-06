@@ -75,7 +75,8 @@ export function useSketchComments(replaceImageId: string | undefined, onCommit: 
   const finishMove = () => {
     const before = dragBeforeRef.current
     dragBeforeRef.current = null
-    if (before) onCommit(before)
+    // 输入框打开期间的拖动并入这次编辑，收起时统一记录；拖动中途撤销过时位置可能并未变化
+    if (before && !editBeforeRef.current && JSON.stringify(before) !== JSON.stringify(comments)) onCommit(before)
   }
 
   /** 撤销 / 重做时整体恢复评论，并收起输入框 */

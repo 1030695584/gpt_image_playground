@@ -756,11 +756,14 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     if (before) pushHistory(before)
   }
 
-  // commitCustomColor 只依赖 ref 和稳定的 setter，注册一次即可
+  // 原生 change 监听只注册一次，通过 ref 调用最新的 commitCustomColor，撤销记录里的评论才是当前值
+  const commitCustomColorRef = useRef(commitCustomColor)
+  commitCustomColorRef.current = commitCustomColor
   useEffect(() => {
     const input = colorInputRef.current!
-    input.addEventListener('change', commitCustomColor)
-    return () => input.removeEventListener('change', commitCustomColor)
+    const handleChange = () => commitCustomColorRef.current()
+    input.addEventListener('change', handleChange)
+    return () => input.removeEventListener('change', handleChange)
   }, [])
 
   const applyColor = (next: string) => {
