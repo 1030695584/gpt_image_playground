@@ -109,8 +109,10 @@ export function EditorSizeSlider({
         }}
         onKeyUp={() => endAdjust('key')}
         onBlur={() => endAdjust('key')}
-        // 点按滑块不抢焦点，画板输入文字时可以边打字边调字号
-        onMouseDown={(e) => e.preventDefault()}
+        // 正在输入文字时点按滑块不抢焦点，可以边打字边调字号；其余情况照常聚焦以便方向键微调
+        onMouseDown={(e) => {
+          if (document.activeElement instanceof HTMLTextAreaElement) e.preventDefault()
+        }}
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId)
           startAdjust('pointer')
@@ -121,6 +123,8 @@ export function EditorSizeSlider({
         }}
         onPointerUp={finish}
         onPointerCancel={finish}
+        // 未正常抬起就丢失捕获（如切走窗口）时也要结束调节，否则调用方会一直处于调节状态
+        onLostPointerCapture={() => endAdjust('pointer')}
       >
         <div className="absolute bottom-[14px] left-1/2 top-[14px] w-1 -translate-x-1/2 rounded-full bg-gray-200 dark:bg-white/10" />
         <div

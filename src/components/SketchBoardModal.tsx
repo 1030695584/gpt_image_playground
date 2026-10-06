@@ -512,8 +512,14 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     if (tool === 'text') {
       if (point.x < 0 || point.y < 0 || point.x > docSize.width || point.y > docSize.height) return
       const hit = findTopElementAt(elements.filter((el) => el.type === 'text'), point, tolerance, measureCtx)
+      // 编辑已有文字时滑块和色块会直接作用于它，需先同步为这段文字的字号和颜色
+      if (hit?.type === 'text') {
+        selectElement(hit)
+        startEditing(hit)
+        return
+      }
       const fontSize = getSketchFontSize(strokeWidth)
-      startEditing(hit?.type === 'text' ? hit : {
+      startEditing({
         id: createId(),
         type: 'text',
         color,
