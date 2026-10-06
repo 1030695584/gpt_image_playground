@@ -174,23 +174,28 @@ describe('prompt image mentions', () => {
       expect(remapImageMentionsForOrder(prompt, images, [images[1]])).toBe('')
     })
 
-    it('expands comments into percentage-coordinate lines, separating different images with a blank line', () => {
-      const prompt = `把背景换掉${getImageCommentMention(0, comments)}${getImageCommentMention(1, [comments[1]])}`
+    it('expands comments into percentage-coordinate lines, separated from text and other images by a blank line', () => {
+      const prompt = `把背景换掉${getImageCommentMention(0, comments)}${getImageCommentMention(1, [comments[1]])} 整体偏暖色调`
       expect(stripImageMentionMarkers(expandImageCommentMentions(prompt))).toBe([
         '把背景换掉',
+        '',
         '@图1 notes:',
         '1. (X=52%, Y=41%) 改成红色 "引号"',
         '2. (X=10%, Y=80%) 删除',
         '',
         '@图2 notes:',
         '1. (X=10%, Y=80%) 删除',
+        '',
+        '整体偏暖色调',
       ].join('\n'))
       expect(replaceImageMentionsForApi(expandImageCommentMentions(getImageCommentMention(0, comments)), 1)).toContain('[image 1] notes:')
     })
 
     it('shows the exact request text for task records', () => {
       const prompt = `参考 ${getSelectedImageMentionLabel(0)} ${getImageCommentMention(0, [comments[1]])}`
-      expect(getTaskPromptText(prompt, 1)).toBe('参考 [image 1] \n[image 1] notes:\n1. (X=10%, Y=80%) 删除')
+      expect(getTaskPromptText(prompt, 1)).toBe('参考 [image 1]\n\n[image 1] notes:\n1. (X=10%, Y=80%) 删除')
+      // 原本就空了一行时不再重复补空行
+      expect(getTaskPromptText(`前\n\n${getImageCommentMention(0, [comments[1]])}\n\n后`, 1)).toBe('前\n\n[image 1] notes:\n1. (X=10%, Y=80%) 删除\n\n后')
     })
   })
 })

@@ -222,18 +222,36 @@ export function upsertImageCommentMention(prompt: string, index: number, comment
 
 /** 把评论胶囊展开为普通图片提及加评论列表；任务中保存原始胶囊以便复用，发送请求和展示时再展开 */
 export function expandImageCommentMentions(prompt: string) {
-  return prompt.replace(IMAGE_COMMENT_MENTION_RE, (text, n, data, offset: number, whole: string) => {
-    const comments = parseImageComments(data)
-    if (!comments.length) return ''
+  // 评论段独占成段：与前后的普通文字、以及其他图片的评论段之间都空一行
+  const ensureBlankLine = (text: string, trailing: boolean) => {
+    const newlines = (trailing ? /\n*$/ : /^\n*/).exec(text)![0].length
+    return '\n'.repeat(Math.max(0, 2 - newlines))
+  }
+  let result = ''
+  let lastIndex = 0
+  let afterBlock = false
+  const appendText = (text: string) => {
+    // 紧贴评论段的行内空白没有意义，去掉后再补空行
+    const trimmed = afterBlock ? text.replace(/^[ \t]+/, '') : text
+    if (!trimmed) return
+    if (afterBlock) result += ensureBlankLine(trimmed, false)
+    afterBlock = false
+    result += trimmed
+  }
+  for (const match of prompt.matchAll(IMAGE_COMMENT_MENTION_RE)) {
+    appendText(prompt.slice(lastIndex, match.index))
+    lastIndex = match.index! + match[0].length
+    const comments = parseImageComments(match[2])
+    if (!comments.length) continue
     const percent = (value: number) => `${Math.round(value * 100)}%`
     const lines = comments.map((comment, idx) => `${idx + 1}. (X=${percent(comment.x)}, Y=${percent(comment.y)}) ${comment.text}`)
-    const block = `${getSelectedImageMentionLabel(Number(n) - 1)} notes:\n${lines.join('\n')}`
-    // 评论块独占成段，与前后文本及其他图片的评论块用换行分隔
-    const end = offset + text.length
-    const before = offset > 0 && whole[offset - 1] !== '\n' ? '\n' : ''
-    const after = end < whole.length && whole[end] !== '\n' ? '\n' : ''
-    return `${before}${block}${after}`
-  })
+    result = result.replace(/[ \t]+$/, '')
+    if (result) result += ensureBlankLine(result, true)
+    result += `${getSelectedImageMentionLabel(Number(match[1]) - 1)} notes:\n${lines.join('\n')}`
+    afterBlock = true
+  }
+  appendText(prompt.slice(lastIndex))
+  return result
 }
 
 /** 任务卡片、详情等直接展示实际发送给接口的提示词原文：图片提及换成 [image N]，评论胶囊展开 */
