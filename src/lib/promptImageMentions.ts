@@ -227,7 +227,7 @@ export function expandImageCommentMentions(prompt: string) {
     if (!comments.length) return ''
     const percent = (value: number) => `${Math.round(value * 100)}%`
     const lines = comments.map((comment, idx) => `${idx + 1}. (X=${percent(comment.x)}, Y=${percent(comment.y)}) ${comment.text}`)
-    const block = `Comments on ${getSelectedImageMentionLabel(Number(n) - 1)} (X/Y are percentages of the image width/height):\n${lines.join('\n')}`
+    const block = `${getSelectedImageMentionLabel(Number(n) - 1)} notes:\n${lines.join('\n')}`
     // 评论块独占成段，与前后文本及其他图片的评论块用换行分隔
     const end = offset + text.length
     const before = offset > 0 && whole[offset - 1] !== '\n' ? '\n' : ''

@@ -178,19 +178,19 @@ describe('prompt image mentions', () => {
       const prompt = `把背景换掉${getImageCommentMention(0, comments)}${getImageCommentMention(1, [comments[1]])}`
       expect(stripImageMentionMarkers(expandImageCommentMentions(prompt))).toBe([
         '把背景换掉',
-        'Comments on @图1 (X/Y are percentages of the image width/height):',
+        '@图1 notes:',
         '1. (X=52%, Y=41%) 改成红色 "引号"',
         '2. (X=10%, Y=80%) 删除',
         '',
-        'Comments on @图2 (X/Y are percentages of the image width/height):',
+        '@图2 notes:',
         '1. (X=10%, Y=80%) 删除',
       ].join('\n'))
-      expect(replaceImageMentionsForApi(expandImageCommentMentions(getImageCommentMention(0, comments)), 1)).toContain('Comments on [image 1]')
+      expect(replaceImageMentionsForApi(expandImageCommentMentions(getImageCommentMention(0, comments)), 1)).toContain('[image 1] notes:')
     })
 
     it('shows the exact request text for task records', () => {
       const prompt = `参考 ${getSelectedImageMentionLabel(0)} ${getImageCommentMention(0, [comments[1]])}`
-      expect(getTaskPromptText(prompt, 1)).toBe('参考 [image 1] \nComments on [image 1] (X/Y are percentages of the image width/height):\n1. (X=10%, Y=80%) 删除')
+      expect(getTaskPromptText(prompt, 1)).toBe('参考 [image 1] \n[image 1] notes:\n1. (X=10%, Y=80%) 删除')
     })
   })
 })
