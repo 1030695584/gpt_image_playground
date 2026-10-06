@@ -7,7 +7,6 @@ import { canvasToBlob, loadImage } from '../lib/canvasImage'
 import { blobToDataUrl } from '../lib/dataUrl'
 import { storeImage } from '../lib/db'
 import { cacheImage } from '../lib/imageCache'
-import { getImageComments, upsertImageCommentMention } from '../lib/promptImageMentions'
 import {
   SKETCH_FONT_FAMILY,
   SKETCH_HANDLES,
@@ -16,6 +15,7 @@ import {
   SKETCH_MAX_STROKE,
   SKETCH_MIN_STROKE,
   SKETCH_SHAPES,
+  createSketchId,
   drawEraseStroke,
   drawSketchElementWithErase,
   findTopElementAt,
@@ -34,7 +34,6 @@ import {
   snapToAngle,
   transformElement,
   type SketchBounds,
-  type SketchComment,
   type SketchElement,
   type SketchEraseStroke,
   type SketchHandle,
@@ -47,6 +46,7 @@ import {
 } from '../lib/sketch'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { useEditorViewport } from '../hooks/useEditorViewport'
+import { useSketchComments } from '../hooks/useSketchComments'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
 import { TooltipButton } from './TooltipButton'
@@ -75,6 +75,7 @@ type Gesture =
   | { kind: 'draw'; pointerId: number; el: SketchPathElement }
   | { kind: 'shape'; pointerId: number; el: SketchShapeElement }
   | { kind: 'erase'; pointerId: number; stroke: SketchEraseStroke }
+  | { kind: 'comment'; pointerId: number; point: SketchPoint }
   | { kind: 'move'; pointerId: number; before: SketchElement[]; changed?: boolean; start: SketchPoint; targetId: string }
   | { kind: 'endpoint'; pointerId: number; before: SketchElement[]; changed?: boolean; target: SketchShapeElement; handle: EndpointHandle }
   | {
@@ -122,10 +123,6 @@ const SHAPE_LABELS: Record<SketchShapeKind, string> = {
   diamond: '菱形',
   star: '星形',
   heart: '心形',
-}
-
-function createId() {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 function ShapeIcon({ shape }: { shape: SketchShapeKind }) {
@@ -199,14 +196,18 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
   const [hoverCursor, setHoverCursor] = useState('default')
   const [isAdjustingWidth, setIsAdjustingWidth] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
-  // 重新编辑参考图时，从提示词中该图的评论胶囊恢复原有评论
-  const [initialComments] = useState(() => {
-    const state = useStore.getState()
-    const idx = replaceImageId ? state.inputImages.findIndex((img) => img.id === replaceImageId) : -1
-    return idx >= 0 ? getImageComments(state.prompt, idx) : []
-  })
-  const [comments, setComments] = useState<SketchComment[]>(() => initialComments.map((comment) => ({ ...comment, id: createId() })))
-  const [activeCommentId, setActiveCommentId] = useState<string | null>(null)
+  const {
+    comments,
+    activeCommentId,
+    commentData,
+    commentsChanged,
+    updateComment,
+    createComment,
+    finishComment,
+    openComment,
+    removeComment,
+    saveComments,
+  } = useSketchComments(replaceImageId)
 
   const viewport = useEditorViewport(frameRef, viewRef, Boolean(docSize))
   const customColorTooltip = useTooltip()
@@ -219,8 +220,6 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
   const selected = elements.find((el) => el.id === selectedId) ?? null
   const canUndo = undoRef.current.length > 0 && !isSaving
   const canRedo = redoRef.current.length > 0 && !isSaving
-  const commentData = comments.filter((comment) => comment.text.trim()).map((comment) => ({ x: comment.x, y: comment.y, text: comment.text.trim() }))
-  const commentsChanged = JSON.stringify(commentData) !== JSON.stringify(initialComments)
   const canConfirm = elements.length > 0 || commentsChanged || (Boolean(baseImage) && !replaceImageId)
 
   const closeNow = () => setSketchBoard(null)
@@ -511,11 +510,6 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
       textareaRef.current?.blur()
       return
     }
-    // 评论输入框打开时，点击画布只负责收起它（输入框不会失焦，需手动结束）
-    if (activeCommentId) {
-      finishComment()
-      return
-    }
 
     event.currentTarget.setPointerCapture(event.pointerId)
     const viewportGesture = viewport.pointerDown(event)
@@ -525,6 +519,11 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
       return
     }
     if (viewport.isPinching() || gestureRef.current) return
+    // 评论输入框打开时，点击画布只负责收起它（输入框不会失焦，需手动结束）
+    if (activeCommentId) {
+      finishComment()
+      return
+    }
 
     setShowShapeMenu(false)
     const point = toDocPoint(event)
@@ -542,7 +541,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
       }
       const fontSize = getSketchFontSize(strokeWidth)
       startEditing({
-        id: createId(),
+        id: createSketchId(),
         type: 'text',
         color,
         width: strokeWidth,
@@ -555,22 +554,18 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     }
     if (tool === 'comment') {
       if (point.x < 0 || point.y < 0 || point.x > docSize.width || point.y > docSize.height) return
-      const id = createId()
-      // 同步渲染输入框，使其在用户手势内获得焦点，移动端才会弹出软键盘
-      flushSync(() => {
-        setComments((items) => [...items, { id, x: point.x / docSize.width, y: point.y / docSize.height, text: '' }])
-        setActiveCommentId(id)
-      })
+      // 抬起时才新建评论，开始双指捏合时手势被取消，不会误建评论
+      gestureRef.current = { kind: 'comment', pointerId, point }
       return
     }
     if (tool === 'pen') {
-      const el: SketchPathElement = { id: createId(), type: 'path', color, width: strokeWidth, points: [point] }
+      const el: SketchPathElement = { id: createSketchId(), type: 'path', color, width: strokeWidth, points: [point] }
       gestureRef.current = { kind: 'draw', pointerId, el }
       setDraft(el)
       return
     }
     if (tool === 'shape') {
-      const el: SketchShapeElement = { id: createId(), type: 'shape', shape, color, width: strokeWidth, start: point, end: point }
+      const el: SketchShapeElement = { id: createSketchId(), type: 'shape', shape, color, width: strokeWidth, start: point, end: point }
       gestureRef.current = { kind: 'shape', pointerId, el }
       setDraft(el)
       return
@@ -659,6 +654,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
       setDraft(gesture.el)
       return
     }
+    if (gesture.kind === 'comment') return
     gesture.changed = true
     if (gesture.kind === 'move') {
       const dx = point.x - gesture.start.x
@@ -693,6 +689,12 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     if (!gesture || gesture.pointerId !== event.pointerId) return
     gestureRef.current = null
 
+    if (gesture.kind === 'comment') {
+      if (event.type !== 'pointerup') return
+      // 同步渲染输入框，使其在用户手势内获得焦点，移动端才会弹出软键盘
+      flushSync(() => createComment(gesture.point.x / docSize!.width, gesture.point.y / docSize!.height))
+      return
+    }
     if (gesture.kind === 'draw') {
       commit([...elements, gesture.el])
       setDraft(null)
@@ -786,20 +788,6 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     if (next !== 'select') setSelectedId(null)
   }
 
-  /** 收起评论输入框，空评论直接删除 */
-  const finishComment = () => {
-    setComments((items) => items.flatMap((comment) => {
-      if (comment.id !== activeCommentId) return [comment]
-      return comment.text.trim() ? [{ ...comment, text: comment.text.trim() }] : []
-    }))
-    setActiveCommentId(null)
-  }
-
-  const openComment = (id: string) => {
-    setComments((items) => items.filter((comment) => comment.id === id || comment.id !== activeCommentId || comment.text.trim()))
-    setActiveCommentId(id)
-  }
-
   const handleConfirm = async () => {
     if (!docSize || !canConfirm || isSaving) return
     const state = useStore.getState()
@@ -809,12 +797,6 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
       return
     }
 
-    // 评论写入提示词中该图的评论胶囊：已有则原地更新，否则插到输入框光标处
-    const saveComments = (idx: number) => {
-      if (!commentsChanged || idx < 0) return
-      const latest = useStore.getState()
-      latest.setPrompt(upsertImageCommentMention(latest.prompt, idx, commentData, latest.promptCursor ?? Infinity))
-    }
     // 只改了评论时不必重新导出图片
     if (replaceIdx >= 0 && elements.length === 0) {
       saveComments(replaceIdx)
@@ -832,6 +814,14 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
       const dataUrl = await blobToDataUrl(await canvasToBlob(canvas, 'image/png'))
       const id = await storeImage(dataUrl, 'upload')
       cacheImage(id, dataUrl)
+      // 参考图按内容哈希去重：导出结果与另一张参考图完全相同时不重复添加，评论合并到那张图上
+      const existingIdx = useStore.getState().inputImages.findIndex((img) => img.id === id)
+      if (existingIdx >= 0 && existingIdx !== replaceIdx) {
+        if (commentData.length) saveComments(existingIdx, true)
+        showToast(commentData.length ? `参考图中已有相同的图片，评论已合并到图${existingIdx + 1}` : '参考图中已有相同的图片', 'info')
+        closeNow()
+        return
+      }
       if (replaceIdx >= 0) {
         useStore.getState().replaceInputImage(replaceIdx, { id, dataUrl })
         showToast('参考图已更新', 'success')
@@ -839,7 +829,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
         useStore.getState().addInputImage({ id, dataUrl })
         showToast('草图已添加到参考图', 'success')
       }
-      saveComments(useStore.getState().inputImages.findIndex((img) => img.id === id))
+      if (commentsChanged) saveComments(useStore.getState().inputImages.findIndex((img) => img.id === id))
       closeNow()
     } catch (err) {
       console.error(err)
@@ -1050,14 +1040,11 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
                   : Infinity}
                 canOpen={tool === 'comment'}
                 toDocPoint={toDocPoint}
-                onMove={(id, x, y) => setComments((items) => items.map((comment) => comment.id === id ? { ...comment, x, y } : comment))}
+                onMove={(id, x, y) => updateComment(id, { x, y })}
                 onOpen={openComment}
-                onChangeText={(id, text) => setComments((items) => items.map((comment) => comment.id === id ? { ...comment, text } : comment))}
+                onChangeText={(id, text) => updateComment(id, { text })}
                 onFinish={finishComment}
-                onDelete={(id) => {
-                  setComments((items) => items.filter((comment) => comment.id !== id))
-                  setActiveCommentId(null)
-                }}
+                onDelete={removeComment}
               />
             </div>
           )}

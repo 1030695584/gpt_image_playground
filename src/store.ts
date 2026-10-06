@@ -24,7 +24,7 @@ import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
 import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, mergeImportedSettings, mergePresetImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPresetProviderIds, isPresetConfigDeletionPrevented, isPresetConfigOnlyEnabled, isPresetConfigParamsLocked, isPresetProfile, isPresetProviderDeletionPrevented } from './lib/presetConfig'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
-import { getPromptDisplayText, getTaskPromptText, remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
+import { getTaskPromptText, remapImageMentionsForOrder, replaceImageMentionsForApi, stripImageMentionMarkers } from './lib/promptImageMentions'
 import {
   getAllTasks,
   putTask as dbPutTask,
@@ -1958,7 +1958,7 @@ async function generateAgentConversationTitle(
 
     updateAgentConversation(conversationId, (current) => {
       const firstRound = current.rounds[0]
-      if (!firstRound || getPromptDisplayText(firstRound.prompt) !== prompt || current.title !== fallbackTitle) return current
+      if (!firstRound || stripImageMentionMarkers(firstRound.prompt) !== prompt || current.title !== fallbackTitle) return current
       return { ...current, title, updatedAt: Date.now() }
     })
   } catch {
@@ -2414,7 +2414,7 @@ export async function submitAgentMessage() {
 
   let fallbackTitle: string | null = null
   updateAgentConversation(conversation.id, (current) => {
-    const nextTitle = current.rounds.length === 0 ? createAgentConversationTitle(getPromptDisplayText(trimmedPrompt), current.title) : current.title
+    const nextTitle = current.rounds.length === 0 ? createAgentConversationTitle(stripImageMentionMarkers(trimmedPrompt), current.title) : current.title
     if (current.rounds.length === 0) fallbackTitle = nextTitle
     const messages = shouldAppendToEditingRound
       ? current.messages.some((message) => message.id === userMessageId)
@@ -2446,7 +2446,7 @@ export async function submitAgentMessage() {
   state.setAgentEditingRoundId(null)
 
   if (fallbackTitle) {
-    void generateAgentConversationTitle(conversation.id, getPromptDisplayText(trimmedPrompt), inputImageIds, requestSettings, activeProfile, fallbackTitle)
+    void generateAgentConversationTitle(conversation.id, stripImageMentionMarkers(trimmedPrompt), inputImageIds, requestSettings, activeProfile, fallbackTitle)
   }
 
   void executeAgentRound(conversation.id, roundId, normalizedParams, requestSettings, activeProfile, imageProfile)
@@ -3901,7 +3901,8 @@ export async function reuseConfig(task: TaskRecord) {
     }
   }
   setInputImages(imgs)
-  setPrompt(task.prompt)
+  // 部分参考图可能已被删除，按图片 id 重新对齐提示词中的图片序号，避免评论和提及错位到其他图片
+  setPrompt(remapImageMentionsForOrder(task.prompt, task.inputImageIds.map((id) => ({ id, dataUrl: '' })), useStore.getState().inputImages))
   const maskTargetImageId = task.maskTargetImageId ?? (task.maskImageId ? task.inputImageIds[0] : null)
   if (maskTargetImageId && task.maskImageId && imgs.some((img) => img.id === maskTargetImageId)) {
     const maskDataUrl = await ensureImageCached(task.maskImageId)

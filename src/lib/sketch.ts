@@ -2,6 +2,10 @@ import type { ImageComment } from '../types'
 
 export type SketchTool = 'select' | 'pen' | 'text' | 'shape' | 'eraser' | 'comment'
 
+export function createSketchId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
 /** 画板中的评论，坐标同样为相对画布宽高的比例，与原图一致 */
 export interface SketchComment extends ImageComment {
   id: string

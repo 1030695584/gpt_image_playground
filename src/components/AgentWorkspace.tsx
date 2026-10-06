@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { AgentMessage, AgentRound, TaskRecord } from '../types'
 import { editOutputs, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, reuseConfig, useStore } from '../store'
-import { getActiveAgentRounds, getAgentBranchLeafId, getConversationSearchText, getAgentRoundTaskIds, getAgentSiblingRounds } from '../lib/agentConversationState'
+import { getActiveAgentRounds, getAgentBranchLeafId, getAgentRoundPath, getConversationSearchText, getAgentRoundTaskIds, getAgentSiblingRounds } from '../lib/agentConversationState'
 import { ensureImageCached, getCachedImage } from '../lib/imageCache'
 import { getPromptMentionParts } from '../lib/promptImageMentions'
+import { replaceAgentPromptImageReferencesForApi } from '../lib/agentImageReferences'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import type { AgentWebSearchStatus } from '../lib/agentWebSearch'
 import { getAgentAssistantBlocks, getAgentAssistantCopyContent, getRoundTaskSlots } from '../lib/agentAssistantBlocks'
@@ -981,7 +982,8 @@ export default function AgentWorkspace() {
                         ) : (
                           <>
                             <AgentActionButton tooltip="复制提示词" className="p-1.5 rounded-md hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-200/50 dark:hover:bg-white/[0.04] transition-colors" onClick={() => {
-                              void handleCopyMessage(message.content);
+                              // 与画廊一致，复制实际发送给接口的文字
+                              void handleCopyMessage(round ? replaceAgentPromptImageReferencesForApi(message.content, round, getAgentRoundPath(conversation, round.id), tasks) : message.content);
                             }}>
                               <CopyIcon className="w-4 h-4" />
                             </AgentActionButton>

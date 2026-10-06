@@ -142,6 +142,14 @@ describe('prompt image mentions', () => {
       expect(getPromptMentionParts(prompt, images)[1]).toEqual({ type: 'mention', text: '@图2 评论', imageIndex: 1, mentionText: getImageCommentMention(1, comments) })
     })
 
+    it('inserts a comment mention right before an existing mention without breaking it', () => {
+      const prompt = `abc${getSelectedImageMentionLabel(0)} tail`
+      for (const [cursor, before] of [[3, 'abc'], [0, '']] as const) {
+        const next = upsertImageCommentMention(cursor === 0 ? `${getSelectedImageMentionLabel(0)} tail` : prompt, 1, comments, cursor)
+        expect(next).toBe(`${before}${getImageCommentMention(1, comments)}${getSelectedImageMentionLabel(0)} tail`)
+      }
+    })
+
     it('inserts, replaces and removes the comment mention of an image', () => {
       const inserted = upsertImageCommentMention('前后', 0, comments, 1)
       expect(stripImageMentionMarkers(inserted)).toBe('前@图1 评论后')

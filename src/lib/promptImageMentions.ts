@@ -36,8 +36,10 @@ export function getPromptIndexFromVisibleIndex(prompt: string, visibleIndex: num
       while (i + 1 < prompt.length && prompt[i + 1] !== MENTION_END) i++
       continue
     }
-    if (prompt[i] === MENTION_START || prompt[i] === MENTION_END) continue
+    if (prompt[i] === MENTION_END) continue
+    // 位置恰好在提及开头时返回其起始标记之前，避免把内容插进提及内部
     if (visible >= visibleIndex) return i
+    if (prompt[i] === MENTION_START) continue
     visible++
   }
   return prompt.length
@@ -170,9 +172,9 @@ function parseImageComments(data: string): ImageComment[] {
     // 数据来自持久化的提示词，逐项校验
     return value.flatMap((item) => {
       if (!item || typeof item !== 'object') return []
-      const { x, y, text } = item as Record<string, unknown>
-      if (typeof x !== 'number' || typeof y !== 'number' || typeof text !== 'string') return []
-      return [{ x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)), text }]
+      const comment = item as Record<string, unknown>
+      if (typeof comment.x !== 'number' || typeof comment.y !== 'number' || typeof comment.text !== 'string') return []
+      return [{ x: Math.min(1, Math.max(0, comment.x)), y: Math.min(1, Math.max(0, comment.y)), text: comment.text }]
     })
   } catch {
     return []
@@ -226,11 +228,6 @@ export function expandImageCommentMentions(prompt: string) {
     const after = end < whole.length && whole[end] !== '\n' ? '\n' : ''
     return `${before}${block}${after}`
   })
-}
-
-/** 任务卡片、详情、搜索等展示用的纯文本：评论胶囊展开，并去掉提及标记 */
-export function getPromptDisplayText(prompt: string) {
-  return stripImageMentionMarkers(expandImageCommentMentions(prompt))
 }
 
 /** 任务卡片、详情等直接展示实际发送给接口的提示词原文：图片提及换成 [image N]，评论胶囊展开 */

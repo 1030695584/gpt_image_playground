@@ -269,10 +269,12 @@ export default function Lightbox() {
 
   if (!lightboxImageId || !src) return null
 
-  // 在任务详情中查看参考图时取该任务提示词里的评论，否则取当前输入中的评论
+  // 在任务详情中查看参考图时取该任务提示词里的评论；从输入栏打开时取当前草稿的评论；
+  // 其他入口（如 Agent 消息）无法确定对应哪次发送，不显示评论
   const detailTask = detailTaskId ? tasks.find((task) => task.id === detailTaskId) : undefined
   const detailIdx = detailTask ? detailTask.inputImageIds.indexOf(lightboxImageId) : -1
-  const inputIdx = inputImages.findIndex((img) => img.id === lightboxImageId)
+  const isFromInputBar = lightboxImageList.length === inputImages.length && inputImages.every((img, idx) => img.id === lightboxImageList[idx])
+  const inputIdx = isFromInputBar ? inputImages.findIndex((img) => img.id === lightboxImageId) : -1
   const comments = detailTask && detailIdx >= 0
     ? getImageComments(detailTask.prompt, detailIdx)
     : inputIdx >= 0 ? getImageComments(prompt, inputIdx) : []
