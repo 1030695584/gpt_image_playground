@@ -146,7 +146,7 @@ export default function SketchCommentLayer({
           <TooltipButton
             tooltip="删除评论"
             wrapperClassName="relative inline-flex flex-none"
-            className="flex h-8 w-8 items-center justify-center rounded-xl text-gray-400 transition hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-500/10"
+            className="flex h-8 w-8 items-center justify-center rounded-xl text-gray-400 transition hover:bg-red-500/[0.1] hover:text-red-600 dark:hover:bg-red-500/[0.16]"
             onClick={() => onDelete(active.id)}
           >
             <TrashIcon className="h-4 w-4" />

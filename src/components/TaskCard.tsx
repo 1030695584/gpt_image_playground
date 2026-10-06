@@ -715,7 +715,7 @@ export default function TaskCard({
               <TaskActionButton
                 tooltip="删除任务"
                 onClick={onDelete}
-                className="p-1.5 rounded-md hover:bg-red-50 dark:hover:bg-red-950/30 text-gray-400 hover:text-red-500 transition"
+                className="p-1.5 rounded-md hover:bg-red-500/[0.1] dark:hover:bg-red-500/[0.16] text-gray-400 hover:text-red-600 transition"
               >
                 <svg
                   className="w-4 h-4"
