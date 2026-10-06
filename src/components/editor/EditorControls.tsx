@@ -30,7 +30,7 @@ export function EditorTopBar({ left, center, right }: { left: ReactNode; center:
   return (
     <div className="grid flex-none grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 py-3 sm:px-4">
       <div className="flex min-w-0 items-center gap-0.5">{left}</div>
-      <div className="flex items-center gap-1 rounded-2xl bg-gray-100/80 p-1 dark:bg-white/[0.06]">{center}</div>
+      <div className="flex items-center gap-0.5 rounded-2xl bg-gray-100/80 p-1 dark:bg-white/[0.06] sm:gap-1">{center}</div>
       <div className="flex min-w-0 items-center justify-end gap-0.5">{right}</div>
     </div>
   )

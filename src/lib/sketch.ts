@@ -1,4 +1,11 @@
-export type SketchTool = 'select' | 'pen' | 'text' | 'shape' | 'eraser'
+import type { ImageComment } from '../types'
+
+export type SketchTool = 'select' | 'pen' | 'text' | 'shape' | 'eraser' | 'comment'
+
+/** 画板中的评论，坐标同样为相对画布宽高的比例，与原图一致 */
+export interface SketchComment extends ImageComment {
+  id: string
+}
 export type SketchShapeKind = 'line' | 'arrow' | 'rect' | 'ellipse' | 'triangle' | 'diamond' | 'star' | 'heart'
 export type SketchHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
 

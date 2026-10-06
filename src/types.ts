@@ -179,6 +179,13 @@ export interface InputImage {
   dataUrl: string
 }
 
+/** 参考图上的评论标注，x / y 为相对原图宽高的比例（0~1） */
+export interface ImageComment {
+  x: number
+  y: number
+  text: string
+}
+
 export interface MaskDraft {
   targetImageId: string
   maskDataUrl: string

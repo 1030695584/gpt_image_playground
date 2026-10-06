@@ -24,7 +24,7 @@ import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
 import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, mergeImportedSettings, mergePresetImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPresetProviderIds, isPresetConfigDeletionPrevented, isPresetConfigOnlyEnabled, isPresetConfigParamsLocked, isPresetProfile, isPresetProviderDeletionPrevented } from './lib/presetConfig'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
-import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
+import { expandImageCommentMentions, remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
   getAllTasks,
   putTask as dbPutTask,
@@ -295,6 +295,9 @@ interface AppState {
   // 输入
   prompt: string
   setPrompt: (p: string) => void
+  /** 输入框最后一次的光标位置（可见文本偏移），供画板等外部入口插入胶囊；未聚焦过时为 null */
+  promptCursor: number | null
+  setPromptCursor: (cursor: number) => void
   inputImages: InputImage[]
   addInputImage: (img: InputImage) => void
   replaceInputImage: (idx: number, img: InputImage) => void
@@ -685,6 +688,8 @@ export const useStore = create<AppState>()(
       // Input
       prompt: '',
       setPrompt: (prompt) => set((s) => syncActiveInputDraft(s, { prompt })),
+      promptCursor: null,
+      setPromptCursor: (promptCursor) => set({ promptCursor }),
       inputImages: [],
       addInputImage: (img) =>
         set((s) => {
@@ -1646,8 +1651,9 @@ export async function initStore() {
 
 /** 提交新任务 */
 export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean } = {}) {
-  const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
+  const { settings, prompt: rawPrompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
     useStore.getState()
+  const prompt = expandImageCommentMentions(rawPrompt)
 
   const normalizedSettings = normalizeSettings(settings)
   let activeProfile = getActiveApiProfile(settings)
@@ -2299,7 +2305,8 @@ async function continueRecoveredAgentRound(taskId: string) {
 
 export async function submitAgentMessage() {
   const state = useStore.getState()
-  const { settings, prompt, inputImages, maskDraft, params, showToast } = state
+  const { settings, inputImages, maskDraft, params, showToast } = state
+  const prompt = expandImageCommentMentions(state.prompt)
   const normalizedSettings = normalizeSettings(settings)
 
   const agentValidationError = getAgentProfileValidationError(normalizedSettings)

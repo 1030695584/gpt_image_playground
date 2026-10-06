@@ -7,6 +7,7 @@ import { canvasToBlob, loadImage } from '../lib/canvasImage'
 import { blobToDataUrl } from '../lib/dataUrl'
 import { storeImage } from '../lib/db'
 import { cacheImage } from '../lib/imageCache'
+import { getImageComments, upsertImageCommentMention } from '../lib/promptImageMentions'
 import {
   SKETCH_FONT_FAMILY,
   SKETCH_HANDLES,
@@ -33,6 +34,7 @@ import {
   snapToAngle,
   transformElement,
   type SketchBounds,
+  type SketchComment,
   type SketchElement,
   type SketchEraseStroke,
   type SketchHandle,
@@ -49,6 +51,7 @@ import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
 import { TooltipButton } from './TooltipButton'
 import ViewportTooltip from './ViewportTooltip'
+import SketchCommentLayer from './SketchCommentLayer'
 import {
   BrushCursor,
   CheckIcon,
@@ -196,6 +199,14 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
   const [hoverCursor, setHoverCursor] = useState('default')
   const [isAdjustingWidth, setIsAdjustingWidth] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  // 重新编辑参考图时，从提示词中该图的评论胶囊恢复原有评论
+  const [initialComments] = useState(() => {
+    const state = useStore.getState()
+    const idx = replaceImageId ? state.inputImages.findIndex((img) => img.id === replaceImageId) : -1
+    return idx >= 0 ? getImageComments(state.prompt, idx) : []
+  })
+  const [comments, setComments] = useState<SketchComment[]>(() => initialComments.map((comment) => ({ ...comment, id: createId() })))
+  const [activeCommentId, setActiveCommentId] = useState<string | null>(null)
 
   const viewport = useEditorViewport(frameRef, viewRef, Boolean(docSize))
   const customColorTooltip = useTooltip()
@@ -208,7 +219,9 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
   const selected = elements.find((el) => el.id === selectedId) ?? null
   const canUndo = undoRef.current.length > 0 && !isSaving
   const canRedo = redoRef.current.length > 0 && !isSaving
-  const canConfirm = elements.length > 0 || (Boolean(baseImage) && !replaceImageId)
+  const commentData = comments.filter((comment) => comment.text.trim()).map((comment) => ({ x: comment.x, y: comment.y, text: comment.text.trim() }))
+  const commentsChanged = JSON.stringify(commentData) !== JSON.stringify(initialComments)
+  const canConfirm = elements.length > 0 || commentsChanged || (Boolean(baseImage) && !replaceImageId)
 
   const closeNow = () => setSketchBoard(null)
 
@@ -218,11 +231,15 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
       textareaRef.current?.blur()
       return
     }
+    if (activeCommentId) {
+      finishComment()
+      return
+    }
     if (showShapeMenu) {
       setShowShapeMenu(false)
       return
     }
-    if (elements.length === 0) {
+    if (elements.length === 0 && !commentsChanged) {
       closeNow()
       return
     }
@@ -494,6 +511,11 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
       textareaRef.current?.blur()
       return
     }
+    // 评论输入框打开时，点击画布只负责收起它（输入框不会失焦，需手动结束）
+    if (activeCommentId) {
+      finishComment()
+      return
+    }
 
     event.currentTarget.setPointerCapture(event.pointerId)
     const viewportGesture = viewport.pointerDown(event)
@@ -528,6 +550,16 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
         y: point.y - (fontSize * SKETCH_LINE_HEIGHT) / 2,
         text: '',
         fontSize,
+      })
+      return
+    }
+    if (tool === 'comment') {
+      if (point.x < 0 || point.y < 0 || point.x > docSize.width || point.y > docSize.height) return
+      const id = createId()
+      // 同步渲染输入框，使其在用户手势内获得焦点，移动端才会弹出软键盘
+      flushSync(() => {
+        setComments((items) => [...items, { id, x: point.x / docSize.width, y: point.y / docSize.height, text: '' }])
+        setActiveCommentId(id)
       })
       return
     }
@@ -754,12 +786,40 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     if (next !== 'select') setSelectedId(null)
   }
 
+  /** 收起评论输入框，空评论直接删除 */
+  const finishComment = () => {
+    setComments((items) => items.flatMap((comment) => {
+      if (comment.id !== activeCommentId) return [comment]
+      return comment.text.trim() ? [{ ...comment, text: comment.text.trim() }] : []
+    }))
+    setActiveCommentId(null)
+  }
+
+  const openComment = (id: string) => {
+    setComments((items) => items.filter((comment) => comment.id === id || comment.id !== activeCommentId || comment.text.trim()))
+    setActiveCommentId(id)
+  }
+
   const handleConfirm = async () => {
     if (!docSize || !canConfirm || isSaving) return
     const state = useStore.getState()
     const replaceIdx = replaceImageId ? state.inputImages.findIndex((img) => img.id === replaceImageId) : -1
     if (replaceIdx < 0 && state.inputImages.length >= MAX_INPUT_IMAGES) {
       showToast(`参考图数量已达上限（${MAX_INPUT_IMAGES} 张），无法继续添加`, 'error')
+      return
+    }
+
+    // 评论写入提示词中该图的评论胶囊：已有则原地更新，否则插到输入框光标处
+    const saveComments = (idx: number) => {
+      if (!commentsChanged || idx < 0) return
+      const latest = useStore.getState()
+      latest.setPrompt(upsertImageCommentMention(latest.prompt, idx, commentData, latest.promptCursor ?? Infinity))
+    }
+    // 只改了评论时不必重新导出图片
+    if (replaceIdx >= 0 && elements.length === 0) {
+      saveComments(replaceIdx)
+      showToast('评论已更新', 'success')
+      closeNow()
       return
     }
 
@@ -779,6 +839,7 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
         useStore.getState().addInputImage({ id, dataUrl })
         showToast('草图已添加到参考图', 'success')
       }
+      saveComments(useStore.getState().inputImages.findIndex((img) => img.id === id))
       closeNow()
     } catch (err) {
       console.error(err)
@@ -875,6 +936,11 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
             <TooltipButton tooltip="橡皮擦" className={getEditorToolButtonClass(tool === 'eraser')} disabled={!isReady} onClick={() => selectTool('eraser')}>
               <EraserIcon />
             </TooltipButton>
+            <TooltipButton tooltip="评论" className={getEditorToolButtonClass(tool === 'comment')} disabled={!isReady} onClick={() => selectTool('comment')}>
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5.5 5h13A1.5 1.5 0 0 1 20 6.5v8.5a1.5 1.5 0 0 1-1.5 1.5H12l-4.5 3.5v-3.5h-2A1.5 1.5 0 0 1 4 15V6.5A1.5 1.5 0 0 1 5.5 5zM8.5 9.5h7M8.5 12.5h4" />
+              </svg>
+            </TooltipButton>
           </>
         }
         right={
@@ -899,7 +965,8 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
           className="absolute inset-0 flex touch-none select-none items-center justify-center overflow-hidden py-4 pl-16 pr-4 sm:px-20 sm:py-6"
           style={{ containerType: 'size', cursor: canvasCursor }}
           onMouseDown={(e) => {
-            if (e.target !== textareaRef.current) e.preventDefault()
+            // 不让点击画布抢走文字或评论输入框的焦点
+            if (!(e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement)) e.preventDefault()
           }}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
@@ -972,6 +1039,22 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
                   size={strokeWidth * viewScale}
                 />
               )}
+              <SketchCommentLayer
+                comments={comments}
+                activeId={activeCommentId}
+                docSize={docSize}
+                viewScale={viewScale}
+                offset={viewport.transform}
+                boundsRight={activeCommentId && viewRef.current && frameRef.current
+                  ? viewRef.current.getBoundingClientRect().right - frameRef.current.getBoundingClientRect().left
+                  : Infinity}
+                canOpen={tool === 'comment'}
+                toDocPoint={toDocPoint}
+                onMove={(id, x, y) => setComments((items) => items.map((comment) => comment.id === id ? { ...comment, x, y } : comment))}
+                onOpen={openComment}
+                onChangeText={(id, text) => setComments((items) => items.map((comment) => comment.id === id ? { ...comment, text } : comment))}
+                onFinish={finishComment}
+              />
             </div>
           )}
         </div>

@@ -1113,6 +1113,8 @@ export default function InputBar() {
 
       const range = getContentEditableSelection(el)
       setCursorPos(range.start)
+      // 记到 store 中，画板等弹窗关闭后可把评论胶囊插回这里
+      useStore.getState().setPromptCursor(range.start)
       syncMentionTagSelection(el)
 
       const rangeRect = domRange.getBoundingClientRect()
