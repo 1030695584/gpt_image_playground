@@ -331,6 +331,17 @@ function LightboxInner({ src, comments, imageId, maskPreviewSrc, onClose, showNa
 
   // 缩放倍率显示：2s 无操作后自动隐藏
   const [showZoomBadge, setShowZoomBadge] = useState(false)
+  // 点击评论气泡可收起 / 展开其文字，切换到其他图片时恢复全部展开
+  const [hiddenComments, setHiddenComments] = useState<{ imageId: string; indexes: number[] }>({ imageId, indexes: [] })
+  // 渲染期间发现图片已切换就直接重置，避免切回原图时沿用旧的收起状态，也不会闪一帧
+  if (hiddenComments.imageId !== imageId) setHiddenComments({ imageId, indexes: [] })
+  const hiddenCommentIndexes = hiddenComments.imageId === imageId ? hiddenComments.indexes : []
+  const toggleComment = (idx: number) => {
+    setHiddenComments({
+      imageId,
+      indexes: hiddenCommentIndexes.includes(idx) ? hiddenCommentIndexes.filter((item) => item !== idx) : [...hiddenCommentIndexes, idx],
+    })
+  }
   const zoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // 拖拽状态
   const dragRef = useRef({
@@ -795,8 +806,21 @@ function LightboxInner({ src, comments, imageId, maskPreviewSrc, onClose, showNa
                 transition: isDragging ? 'none' : 'transform 0.2s ease-out',
               }}
             >
-              <CommentPin index={idx} />
-              <span className={`absolute bottom-0 w-max max-w-[18rem] whitespace-pre-wrap break-words rounded-xl border border-gray-200/80 bg-white/95 px-3 py-2 text-sm leading-snug text-gray-800 shadow-lg backdrop-blur-md dark:border-white/[0.08] dark:bg-gray-800/95 dark:text-gray-100 ${
+              {/* 用按钮承载气泡，触摸手势会把它识别为控件，点按不会关闭预览 */}
+              <button
+                type="button"
+                aria-label={hiddenCommentIndexes.includes(idx) ? `显示评论 ${idx + 1}` : `隐藏评论 ${idx + 1}`}
+                aria-pressed={!hiddenCommentIndexes.includes(idx)}
+                className="pointer-events-auto block cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  toggleComment(idx)
+                }}
+                onDoubleClick={(e) => e.stopPropagation()}
+              >
+                <CommentPin index={idx} />
+              </button>
+              <span className={`absolute bottom-0 ${hiddenCommentIndexes.includes(idx) ? 'hidden' : ''} w-max max-w-[18rem] whitespace-pre-wrap break-words rounded-xl border border-gray-200/80 bg-white/95 px-3 py-2 text-sm leading-snug text-gray-800 shadow-lg backdrop-blur-md dark:border-white/[0.08] dark:bg-gray-800/95 dark:text-gray-100 ${
                 comment.x > 0.6 ? 'right-full mr-1.5' : 'left-full ml-1.5'
               }`}>
                 {comment.text}
