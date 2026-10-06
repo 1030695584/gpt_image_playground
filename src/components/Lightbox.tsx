@@ -783,10 +783,10 @@ function LightboxInner({ src, comments, imageId, maskPreviewSrc, onClose, showNa
             />
           )}
           {comments.map((comment, idx) => (
-            // 气泡尖角落在评论位置，并抵消外层缩放，保持屏幕上的大小不变
+            // 气泡尖角落在评论位置，并抵消外层缩放，保持屏幕上的大小不变；靠右的评论文字放到气泡左侧，避免伸出图片
             <div
               key={idx}
-              className="pointer-events-none absolute flex items-end gap-1.5"
+              className="pointer-events-none absolute"
               style={{
                 left: `${comment.x * 100}%`,
                 bottom: `${(1 - comment.y) * 100}%`,
@@ -795,8 +795,10 @@ function LightboxInner({ src, comments, imageId, maskPreviewSrc, onClose, showNa
                 transition: isDragging ? 'none' : 'transform 0.2s ease-out',
               }}
             >
-              <CommentPin index={idx} className="flex-none" />
-              <span className="w-max max-w-[16rem] break-words rounded-xl border border-gray-200/80 bg-white/95 px-2.5 py-1.5 text-xs leading-snug text-gray-800 shadow-lg backdrop-blur-md dark:border-white/[0.08] dark:bg-gray-800/95 dark:text-gray-100">
+              <CommentPin index={idx} />
+              <span className={`absolute bottom-0 w-max max-w-[18rem] whitespace-pre-wrap break-words rounded-xl border border-gray-200/80 bg-white/95 px-3 py-2 text-sm leading-snug text-gray-800 shadow-lg backdrop-blur-md dark:border-white/[0.08] dark:bg-gray-800/95 dark:text-gray-100 ${
+                comment.x > 0.6 ? 'right-full mr-1.5' : 'left-full ml-1.5'
+              }`}>
                 {comment.text}
               </span>
             </div>

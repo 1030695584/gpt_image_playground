@@ -7,8 +7,8 @@ export function CommentPin({ index, active = false, className = '', style, ...pr
   return (
     <div
       {...props}
-      // 选中时以尖角为原点放大，尖角位置不变；深浅色下都用白色描边，在任意底图上都清晰
-      className={`flex origin-bottom-left select-none items-center justify-center rounded-full rounded-bl-[3px] bg-blue-500 text-[11px] font-semibold tabular-nums text-white shadow-[0_2px_6px_rgba(0,0,0,0.25)] ring-2 ring-white transition-transform ${
+      // 选中时以尖角为原点放大，尖角位置不变；深色模式下描边减淡，避免过亮
+      className={`flex origin-bottom-left select-none items-center justify-center rounded-full rounded-bl-[3px] bg-blue-500 text-[11px] font-semibold tabular-nums text-white shadow-[0_2px_6px_rgba(0,0,0,0.25)] ring-2 ring-white transition-transform dark:ring-white/40 ${
         active ? 'scale-110' : ''
       } ${className}`}
       style={{ width: COMMENT_PIN_SIZE, height: COMMENT_PIN_SIZE, ...style }}
