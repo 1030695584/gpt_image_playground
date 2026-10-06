@@ -118,6 +118,13 @@ export interface SketchBoardRequest {
   replaceImageId?: string
 }
 
+/** 正在进行的批量提交进度 */
+export interface BatchProgress {
+  total: number
+  started: number
+  finished: number
+}
+
 /** 批量提交模式：排队逐条执行，或按并发数同时执行 */
 export type BatchPromptMode = 'queue' | 'concurrent'
 

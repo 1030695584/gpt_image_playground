@@ -1,16 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ApiProfile, AppSettings, BatchPromptMode, TaskParams } from '../../types'
+import type { ApiProfile, AppSettings, BatchProgress, BatchPromptMode, TaskParams } from '../../types'
 import { DEFAULT_BATCH_PROMPT_CONCURRENCY, normalizeBatchPromptConcurrency } from '../../lib/batchPrompts'
 import { dismissAllTooltips } from '../../lib/tooltipDismiss'
 import Select from '../Select'
 import ButtonTooltip from './buttonTooltip'
-import ParamPopoverChip from './paramPopoverChip'
+import ParamPopoverChip, { CHIP_BASE_CLASS, CHIP_IDLE_CLASS } from './paramPopoverChip'
 
-const CHIP_CLASS = 'h-8 px-3.5 rounded-full bg-black/[0.04] dark:bg-white/[0.06] hover:bg-black/[0.07] dark:hover:bg-white/[0.1] text-xs text-gray-700 dark:text-gray-200 transition-colors duration-200 focus:outline-none'
+const CHIP_CLASS = `${CHIP_BASE_CLASS} ${CHIP_IDLE_CLASS}`
 const CHIP_DISABLED_CLASS = 'h-8 px-3.5 rounded-full bg-black/[0.03] dark:bg-white/[0.04] opacity-50 cursor-not-allowed text-xs text-gray-700 dark:text-gray-200'
 const ROW_CLASS = 'relative flex items-center justify-between gap-3'
 const ROW_LABEL_CLASS = 'text-gray-500 dark:text-gray-400'
-const CONTROL_DISABLED_CLASS = 'px-3 py-1.5 rounded-xl border border-transparent dark:border-transparent bg-black/[0.04] dark:bg-white/[0.04] opacity-50 cursor-not-allowed text-xs transition-all duration-200 '
+const CONTROL_DISABLED_CLASS = 'px-3 py-1.5 rounded-xl border border-transparent bg-black/[0.04] dark:bg-white/[0.04] opacity-50 cursor-not-allowed text-xs transition-all duration-200'
 
 type BatchSettingsPatch = Partial<Pick<AppSettings, 'batchPromptEnabled' | 'batchPromptMode' | 'batchPromptConcurrencyLimited' | 'batchPromptConcurrency'>>
 
@@ -30,6 +30,12 @@ function Switch({ checked, disabled, label, onToggle }: { checked: boolean; disa
   )
 }
 
+/** 输入为空或无效时保留原值 */
+function parseConcurrency(input: string, fallback: number) {
+  const parsed = Number(input)
+  return input.trim() && Number.isFinite(parsed) ? normalizeBatchPromptConcurrency(parsed) : fallback
+}
+
 /** 并发数输入框：随弹层挂载，打开时从已保存的值初始化，聚焦输入时实时提示过高的并发数 */
 function ConcurrencyInput({ value, disabled, onCommit }: { value: number; disabled: boolean; onCommit: (value: number) => void }) {
   const [input, setInput] = useState(String(value))
@@ -40,12 +46,12 @@ function ConcurrencyInput({ value, disabled, onCommit }: { value: number; disabl
   // 直接关闭弹层时输入框被卸载而不会触发 blur，卸载时补一次提交
   useEffect(() => () => {
     const latest = latestRef.current
-    const next = normalizeBatchPromptConcurrency(Number(latest.input))
+    const next = parseConcurrency(latest.input, latest.value)
     if (next !== latest.value) latest.onCommit(next)
   }, [])
 
   const commit = () => {
-    const next = normalizeBatchPromptConcurrency(Number(input))
+    const next = parseConcurrency(input, value)
     setInput(String(next))
     if (next !== value) onCommit(next)
   }
@@ -183,7 +189,7 @@ export default function InputParamsPanel({
   batchConcurrencyLimited: boolean
   batchConcurrency: number
   batchPromptCount: number
-  batchProgress: { total: number; finished: number; stopping: boolean } | null
+  batchProgress: BatchProgress | null
   onBatchChange: (patch: BatchSettingsPatch) => void
   onStopBatch: () => void
 }) {
@@ -198,7 +204,7 @@ export default function InputParamsPanel({
   const prefix = (text: string) => <span className="mr-1.5 text-gray-400 dark:text-gray-500">{text}</span>
 
   const batchSummary = batchProgress
-    ? batchProgress.stopping ? '停止中' : `${batchProgress.finished}/${batchProgress.total}`
+    ? `${batchProgress.finished}/${batchProgress.total}`
     : batchEnabled ? `${batchPromptCount} 条` : undefined
 
   return (
@@ -491,10 +497,9 @@ export default function InputParamsPanel({
               <button
                 type="button"
                 onClick={onStopBatch}
-                disabled={batchProgress.stopping}
-                className="rounded-xl bg-red-500/[0.12] px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-500/[0.18] disabled:cursor-not-allowed disabled:opacity-50 dark:bg-red-500/[0.18] dark:text-red-400/90 dark:hover:bg-red-500/[0.25]"
+                className="rounded-xl bg-red-500/[0.12] px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-500/[0.18] dark:bg-red-500/[0.18] dark:text-red-400/90 dark:hover:bg-red-500/[0.25]"
               >
-                {batchProgress.stopping ? '停止中…' : '停止批量'}
+                停止批量
               </button>
             </div>
           )}

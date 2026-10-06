@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  resolveApiProfileModel,
-  splitModelList,
   DEFAULT_FAL_BASE_URL,
   DEFAULT_FAL_MODEL,
   DEFAULT_IMAGES_MODEL,
@@ -21,6 +19,8 @@ import {
   mergeImportedSettings,
   normalizeApiProfile,
   normalizeSettings,
+  resolveApiProfileModel,
+  splitModelList,
   switchApiProfileProvider,
   validateApiProfile,
 } from './apiProfiles'

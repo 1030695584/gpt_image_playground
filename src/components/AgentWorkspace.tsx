@@ -644,7 +644,7 @@ export default function AgentWorkspace() {
               value={conversationSearchQuery}
               onChange={(e) => setConversationSearchQuery(e.target.value)}
               placeholder="搜索聊天..."
-              className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-400 focus:border-blue-400 focus:bg-white dark:border-transparent dark:bg-white/[0.06] dark:text-white dark:focus:border-blue-400 dark:focus:bg-white/[0.07]"
+              className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-400 focus:border-blue-400 focus:bg-white dark:bg-white/[0.06] dark:text-white dark:focus:border-blue-400 dark:focus:bg-white/[0.07]"
             />
           </div>
           <div className="space-y-1 overflow-y-auto flex-1 px-4 pb-4">
@@ -798,7 +798,7 @@ export default function AgentWorkspace() {
                       <article 
                         className={`relative flex min-w-[16rem] max-w-full flex-col rounded-2xl p-4 transition-all duration-200 ${
                         isAssistant 
-                          ? 'bg-black/[0.04] dark:bg-white/[0.06] border border-transparent dark:border-transparent rounded-tl-sm hover:bg-black/[0.07] dark:hover:bg-white/[0.08]' 
+                          ? 'bg-black/[0.04] dark:bg-white/[0.06] border border-transparent rounded-tl-sm hover:bg-black/[0.07] dark:hover:bg-white/[0.08]' 
                           : `bg-gray-100 dark:bg-[#2A2D31] rounded-tr-sm ${isEditing ? 'ring-2 ring-blue-500/50 dark:ring-blue-400/50' : ''}`
                       }`}
                       >
@@ -1020,7 +1020,7 @@ export default function AgentWorkspace() {
                   {renderedMessages}
                   {runningRounds.map((round) => (
                     <div key={`running-${round.id}`} className="flex w-full justify-start mb-6">
-                      <article className="flex min-w-[16rem] max-w-[95%] flex-col rounded-2xl rounded-tl-sm border border-transparent bg-black/[0.04] p-4 dark:border-transparent dark:bg-white/[0.06] md:max-w-[85%] lg:max-w-[75%]">
+                      <article className="flex min-w-[16rem] max-w-[95%] flex-col rounded-2xl rounded-tl-sm border border-transparent bg-black/[0.04] p-4 dark:bg-white/[0.06] md:max-w-[85%] lg:max-w-[75%]">
                         <div className="mb-2 text-sm text-gray-500 dark:text-gray-400">
                           <span className="text-blue-600 dark:text-blue-400 font-semibold">Agent</span> <span className="ml-1 font-normal opacity-60">· 第 {round.index} 轮</span>
                         </div>

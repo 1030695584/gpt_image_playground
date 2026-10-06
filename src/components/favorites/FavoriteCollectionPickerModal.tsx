@@ -435,7 +435,7 @@ export function FavoriteCollectionPickerModal() {
               }}
               type="text"
               placeholder="新建收藏夹..."
-              className="min-w-0 flex-1 rounded-xl border border-transparent bg-black/[0.04] px-4 py-2 text-sm outline-none transition focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-transparent dark:bg-white/[0.06] dark:text-white dark:focus:border-white/30 dark:focus:ring-white/30"
+              className="min-w-0 flex-1 rounded-xl border border-transparent bg-black/[0.04] px-4 py-2 text-sm outline-none transition focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:bg-white/[0.06] dark:text-white dark:focus:border-white/30 dark:focus:ring-white/30"
             />
             <button 
               type="button" 

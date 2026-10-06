@@ -98,6 +98,8 @@ export default function InputBar() {
   const batchProgress = useStore((s) => s.batchProgress)
   const settings = useStore((s) => s.settings)
   const reusedTaskApiProfileId = useStore((s) => s.reusedTaskApiProfileId)
+  const reusedTaskApiModel = useStore((s) => s.reusedTaskApiModel)
+  const setReusedTaskApiModel = useStore((s) => s.setReusedTaskApiModel)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const showToast = useStore((s) => s.showToast)
@@ -424,17 +426,23 @@ export default function InputBar() {
     const reusedProfile = appMode !== 'agent' && settings.reuseTaskApiProfileTemporarily && reusedTaskApiProfileId
       ? settings.profiles.find((profile) => profile.id === reusedTaskApiProfileId)
       : undefined
-    return reusedProfile ? resolveApiProfileModel(reusedProfile) : currentActiveProfile
-  }, [appMode, currentActiveProfile, reusedTaskApiProfileId, settings])
+    return reusedProfile ? resolveApiProfileModel(reusedProfile, reusedTaskApiModel ?? undefined) : currentActiveProfile
+  }, [appMode, currentActiveProfile, reusedTaskApiModel, reusedTaskApiProfileId, settings])
+  const isTemporarilyReusedProfile = activeProfile.id !== currentActiveProfile.id
   const modelOptions = useMemo(() => (
     splitModelList(settings.profiles.find((profile) => profile.id === activeProfile.id)?.model ?? activeProfile.model)
       .map((model) => ({ label: model, value: model }))
   ), [activeProfile.id, activeProfile.model, settings.profiles])
   const handleModelChange = useCallback((model: string) => {
+    // 临时复用其他配置时只切换本次复用的模型，不改动该配置记住的选择
+    if (isTemporarilyReusedProfile) {
+      setReusedTaskApiModel(model)
+      return
+    }
     setSettings({
       profiles: settings.profiles.map((profile) => profile.id === activeProfile.id ? { ...profile, selectedModel: model } : profile),
     })
-  }, [activeProfile.id, setSettings, settings.profiles])
+  }, [activeProfile.id, isTemporarilyReusedProfile, setReusedTaskApiModel, setSettings, settings.profiles])
   const activeAgentConversation = appMode === 'agent'
     ? agentConversations.find((conversation) => conversation.id === activeAgentConversationId) ?? null
     : null
@@ -445,16 +453,25 @@ export default function InputBar() {
       : normalizeSettings({ ...settings, activeProfileId: activeProfile.id })
   ), [activeProfile.id, settingsActiveProfile.id, settings])
   const hasSubmitApiConfig = Boolean(activeProfile.apiKey)
-  const canSubmit = Boolean(prompt.trim() && hasSubmitApiConfig && !activeAgentIsRunning)
+  // 批量进行中暂停画廊和 Agent 的提交，需等待完成或停止后再提交
+  const batchRunning = Boolean(batchProgress)
+  const canSubmit = Boolean(prompt.trim() && hasSubmitApiConfig && !activeAgentIsRunning && !batchRunning)
+  const batchEnabled = appMode === 'gallery' && settings.showBatchPrompt && settings.batchPromptEnabled
+  // 批量进行中始终在画廊显示入口，以便查看进度和停止
+  const showBatch = appMode === 'gallery' && (settings.showBatchPrompt || batchRunning)
+  const batchPromptCount = useMemo(() => batchEnabled ? splitBatchPrompts(prompt).length : 0, [batchEnabled, prompt])
   const submitButtonAriaLabel = activeAgentIsRunning
     ? '停止生成'
     : hasSubmitApiConfig
-    ? maskDraft ? '遮罩编辑' : '生成图像'
+    ? maskDraft ? '遮罩编辑' : batchEnabled ? `批量生成 ${batchPromptCount} 条` : '生成图像'
     : '请先配置 API'
-  const submitTooltipText = activeAgentIsRunning ? '停止生成' : '尚未完成 API 配置，请在右上角设置中进行'
-  const showBatch = appMode === 'gallery' && settings.showBatchPrompt
-  const batchEnabled = showBatch && settings.batchPromptEnabled
-  const batchPromptCount = useMemo(() => batchEnabled ? splitBatchPrompts(prompt).length : 0, [batchEnabled, prompt])
+  const submitTooltipText = activeAgentIsRunning
+    ? '停止生成'
+    : !hasSubmitApiConfig
+    ? '尚未完成 API 配置，请在右上角设置中进行'
+    : appMode === 'agent'
+    ? '画廊批量任务进行中，请等待完成或回到画廊停止后再提交'
+    : '批量任务进行中，请等待完成或停止后再提交'
   const promptPlaceholder = batchEnabled
     ? '每条提示词之间空两行分隔，可输入 @ 来指定参考图...'
     : '描述你想生成的图片，可输入 @ 来指定参考图...'
@@ -1224,7 +1241,7 @@ export default function InputBar() {
     }
   }, [])
 
-  const selectClass = 'px-3 py-1.5 rounded-xl border border-transparent dark:border-transparent bg-black/[0.04] dark:bg-white/[0.06] hover:bg-black/[0.07] dark:hover:bg-white/[0.1] text-xs transition-all duration-200 '
+  const selectClass = 'px-3 py-1.5 rounded-xl border border-transparent bg-black/[0.04] dark:bg-white/[0.06] hover:bg-black/[0.07] dark:hover:bg-white/[0.1] text-xs transition-all duration-200'
 
   const getTouchDropIndex = (touch: React.Touch) => {
     const target = document
@@ -1773,7 +1790,7 @@ export default function InputBar() {
           {/* 输入框 */}
           <div className={`relative grid sm:[contain:inline-size]${promptExpanded ? ' min-h-0 flex-1' : ''}`}>
             {showAtImageMenu && (
-              <div style={{ left: `${menuLeft}px` }} className="absolute bottom-full z-50 mb-2 w-64 overflow-hidden rounded-2xl border border-transparent bg-white/95 p-1.5 shadow-xl ring-1 ring-black/5 backdrop-blur-xl dark:border-transparent dark:bg-gray-800/95 dark:ring-white/[0.06]">
+              <div style={{ left: `${menuLeft}px` }} className="absolute bottom-full z-50 mb-2 w-64 overflow-hidden rounded-2xl border border-transparent bg-white/95 p-1.5 shadow-xl ring-1 ring-black/5 backdrop-blur-xl dark:bg-gray-800/95 dark:ring-white/[0.06]">
                 <div className="px-2 pb-1 pt-0.5 text-[11px] text-gray-400 dark:text-gray-500">选择图片引用</div>
                 <div className="max-h-56 overflow-y-auto custom-scrollbar">
                   {atImageOptions.map((option, optionIndex) => (
@@ -1918,7 +1935,7 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning) && submitHover} text={submitTooltipText} />
                   <button
                     onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
                     disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
@@ -1961,7 +1978,7 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning) && submitHover} text={submitTooltipText} />
                   <button
                     onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
                     disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}

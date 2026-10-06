@@ -235,7 +235,7 @@ export default function Header() {
               </div>
             </div>
           )}
-          <div className="hidden sm:flex items-center gap-1 rounded-xl border border-transparent dark:border-transparent bg-black/[0.04] dark:bg-white/[0.06] p-1 mr-4">
+          <div className="hidden sm:flex items-center gap-1 rounded-xl border border-transparent bg-black/[0.04] dark:bg-white/[0.06] p-1 mr-4">
             <button
               type="button"
               onClick={() => setAppMode('gallery')}
@@ -308,7 +308,7 @@ export default function Header() {
           </div>
         </div>
         <div className={`safe-area-x sm:hidden overflow-hidden transition-all duration-300 ease-in-out ${appMode === 'gallery' && scrollDirection === 'down' ? 'max-h-0 opacity-0 pb-0' : 'max-h-20 opacity-100 pb-2'}`}>
-          <div className="grid grid-cols-2 gap-1 rounded-xl border border-transparent dark:border-transparent bg-black/[0.04] dark:bg-white/[0.06] p-1 mx-2">
+          <div className="grid grid-cols-2 gap-1 rounded-xl border border-transparent bg-black/[0.04] dark:bg-white/[0.06] p-1 mx-2">
             <button
               type="button"
               onClick={() => setAppMode('gallery')}

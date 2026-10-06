@@ -1291,7 +1291,7 @@ export default function SettingsModal() {
                         setShowProfileMenu(!showProfileMenu)
                       }}
                       disabled={profileMenuDisabled}
-                      className={`flex w-full min-w-0 items-center justify-between gap-2 rounded-xl border border-transparent bg-black/[0.04] px-3 py-2 text-sm text-gray-700 outline-none transition dark:border-transparent dark:bg-white/[0.06] dark:text-gray-200 ${profileMenuDisabled ? 'cursor-not-allowed opacity-70' : 'hover:bg-gray-50 dark:hover:bg-white/[0.1]'}`}
+                      className={`flex w-full min-w-0 items-center justify-between gap-2 rounded-xl border border-transparent bg-black/[0.04] px-3 py-2 text-sm text-gray-700 outline-none transition dark:bg-white/[0.06] dark:text-gray-200 ${profileMenuDisabled ? 'cursor-not-allowed opacity-70' : 'hover:bg-gray-50 dark:hover:bg-white/[0.1]'}`}
                       title={activeProfile.name}
                     >
                       <span className="flex min-w-0 items-center gap-2">
@@ -1306,7 +1306,7 @@ export default function SettingsModal() {
                     {showProfileMenu && !profileMenuDisabled && (
                       <>
                         <div
-                          className="absolute right-0 top-full z-50 mt-1.5 w-full overflow-hidden overflow-y-auto rounded-xl border border-transparent bg-white/95 shadow-[0_8px_30px_rgb(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur-xl animate-dropdown-down dark:border-transparent dark:bg-gray-800/95 dark:shadow-[0_8px_30px_rgb(0,0,0,0.4)] dark:ring-white/[0.06] custom-scrollbar"
+                          className="absolute right-0 top-full z-50 mt-1.5 w-full overflow-hidden overflow-y-auto rounded-xl border border-transparent bg-white/95 shadow-[0_8px_30px_rgb(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur-xl animate-dropdown-down dark:bg-gray-800/95 dark:shadow-[0_8px_30px_rgb(0,0,0,0.4)] dark:ring-white/[0.06] custom-scrollbar"
                           style={{ maxHeight: profileMenuMaxHeight }}
                         >
                           {!presetConfigOnly && <button
@@ -1415,7 +1415,7 @@ export default function SettingsModal() {
                     )}
                   </div>
                   {activePresetDescription && (
-                    <div data-selectable-text className="mt-2.5 flex items-start gap-3 rounded-xl border border-transparent bg-black/[0.04] px-3.5 py-3 text-sm leading-6 text-gray-600 dark:border-transparent dark:bg-white/[0.06] dark:text-gray-300">
+                    <div data-selectable-text className="mt-2.5 flex items-start gap-3 rounded-xl border border-transparent bg-black/[0.04] px-3.5 py-3 text-sm leading-6 text-gray-600 dark:bg-white/[0.06] dark:text-gray-300">
                       <svg className="mt-0.5 h-5 w-5 shrink-0 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
@@ -1433,7 +1433,7 @@ export default function SettingsModal() {
                   onBlur={(e) => commitActiveProfilePatch({ name: e.target.value })}
                   type="text"
                   disabled={activeProfileLocked}
-                  className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-transparent dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
                 />
               </label>
 
@@ -1446,7 +1446,7 @@ export default function SettingsModal() {
                   onReorder={handleProviderReorder}
                   options={providerOptions}
                   disabled={presetConfigOnly || activeProfileLocked}
-                  className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-transparent dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
                 />
               </div>
 
@@ -1463,7 +1463,7 @@ export default function SettingsModal() {
                     type="text"
                     disabled={apiProxyEnabled || activeProfileLocked}
                     placeholder={activeProfile.provider === 'fal' ? DEFAULT_FAL_BASE_URL : DEFAULT_SETTINGS.baseUrl}
-                    className={`w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-transparent dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50 ${apiProxyEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    className={`w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50 ${apiProxyEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
                   />
                   <div data-selectable-text className="mt-1.5 min-h-[22px] flex items-center text-xs text-gray-500 dark:text-gray-500">
                     {apiProxyEnabled ? (
@@ -1512,7 +1512,7 @@ export default function SettingsModal() {
                     onBlur={(e) => commitActiveProfilePatch({ apiKey: e.target.value })}
                     type={showApiKey ? 'text' : 'password'}
                     placeholder={activeProfile.provider === 'fal' ? 'FAL_KEY' : 'sk-...'}
-                    className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 pr-10 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-transparent dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 pr-10 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
                   />
                   <button
                     type="button"
@@ -1555,7 +1555,7 @@ export default function SettingsModal() {
                       { label: 'Responses API (/v1/responses)', value: 'responses' },
                     ]}
                     disabled={activeProfileLocked}
-                    className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-transparent dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
                   />
                 <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
                     支持通过查询参数覆盖：<code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">apiMode=images</code> 或 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">apiMode=responses</code>。
@@ -1575,7 +1575,7 @@ export default function SettingsModal() {
                   type="text"
                   disabled={activeProfileLocked}
                   placeholder={activeProfile.provider === 'fal' ? DEFAULT_FAL_MODEL : getDefaultModelForMode(activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode)}
-                  className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-transparent dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
                 />
                   <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
                   {activeProfile.provider === 'fal' ? (
@@ -1608,7 +1608,7 @@ export default function SettingsModal() {
                     type="text"
                     disabled={activeProfileLocked}
                     placeholder={DEFAULT_IMAGES_MODEL}
-                    className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-transparent dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
                   />
                   <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
                     Responses API 的 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">image_generation</code> 工具需要使用 GPT Image 模型，例如 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_IMAGES_MODEL}</code>。
@@ -1631,7 +1631,7 @@ export default function SettingsModal() {
                           ...REASONING_EFFORT_VALUES.map((value) => ({ label: value, value })),
                         ]}
                         disabled={activeProfileLocked}
-                        className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-1.5 text-xs text-gray-700 outline-none transition focus:border-blue-300 dark:border-transparent dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
+                        className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-1.5 text-xs text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
                       />
                     </div>
                   </div>
@@ -1677,7 +1677,7 @@ export default function SettingsModal() {
                             { label: '2 张', value: 2 },
                             { label: '3 张', value: 3 },
                           ]}
-                          className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-1.5 text-xs text-gray-700 outline-none transition focus:border-blue-300 dark:border-transparent dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
+                          className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-1.5 text-xs text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
                         />
                       </div>
                     </div>
@@ -1701,7 +1701,7 @@ export default function SettingsModal() {
                         { label: '本地后处理', value: 'local' },
                       ]}
                       disabled={activeProfileLocked || !activeCustomProviderSupportsNativeTransparentBackground}
-                      className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-1.5 text-xs text-gray-700 outline-none transition focus:border-blue-300 dark:border-transparent dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
+                      className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-1.5 text-xs text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
                     />
                   </div>
                 </div>
@@ -1770,7 +1770,7 @@ export default function SettingsModal() {
                     disabled={activeProfileLocked}
                     min={10}
                     max={600}
-                    className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-transparent dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
                   />
                 </label>
               )}
@@ -1779,7 +1779,7 @@ export default function SettingsModal() {
             
             {activeTab === 'data' && (
               <div className="space-y-4">
-                <div className="rounded-2xl bg-black/[0.04] p-4 border border-transparent dark:bg-white/[0.06] dark:border-transparent flex items-start gap-3">
+                <div className="rounded-2xl bg-black/[0.04] p-4 border border-transparent dark:bg-white/[0.06] flex items-start gap-3">
                   <svg className="w-5 h-5 text-blue-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                   </svg>
@@ -1788,7 +1788,7 @@ export default function SettingsModal() {
                   </div>
                 </div>
 
-                <div className="rounded-2xl border border-transparent bg-black/[0.04] p-4 dark:border-transparent dark:bg-white/[0.06] space-y-4 ">
+                <div className="rounded-2xl border border-transparent bg-black/[0.04] p-4 dark:bg-white/[0.06] space-y-4">
                   <div className="flex items-center gap-2 mb-1">
                     <ExportIcon className="w-4 h-4 text-gray-700 dark:text-gray-300" />
                     <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">导出数据</h4>
@@ -1825,7 +1825,7 @@ export default function SettingsModal() {
                   </button>
                 </div>
 
-                <div className="rounded-2xl border border-transparent bg-black/[0.04] p-4 dark:border-transparent dark:bg-white/[0.06] space-y-4 ">
+                <div className="rounded-2xl border border-transparent bg-black/[0.04] p-4 dark:bg-white/[0.06] space-y-4">
                   <div className="flex items-center gap-2 mb-1">
                     <ImportIcon className="w-4 h-4 text-gray-700 dark:text-gray-300" />
                     <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">导入数据</h4>
@@ -1942,7 +1942,7 @@ export default function SettingsModal() {
                   rel="noopener noreferrer"
                   className="group flex flex-col items-center outline-none"
                 >
-                  <div className="mb-5 flex h-[88px] w-[88px] items-center justify-center rounded-full border border-transparent bg-black/[0.04] text-gray-800 transition-colors group-hover:bg-black/[0.07] dark:border-transparent dark:bg-white/[0.06] dark:text-gray-100 dark:group-hover:bg-white/[0.1]">
+                  <div className="mb-5 flex h-[88px] w-[88px] items-center justify-center rounded-full border border-transparent bg-black/[0.04] text-gray-800 transition-colors group-hover:bg-black/[0.07] dark:bg-white/[0.06] dark:text-gray-100 dark:group-hover:bg-white/[0.1]">
                     <GithubIcon className="h-11 w-11" />
                   </div>
                   <h4 className="text-[17px] font-bold text-gray-800 dark:text-gray-100">GPT Image Playground</h4>
