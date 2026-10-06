@@ -871,6 +871,18 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
     : brushRingPoint ? 'none' : 'crosshair'
 
   const editingSize = editingText ? measureTextElement(measureCtx, editingText) : null
+  // 评论输入框可放置的区域：视口去掉内边距（避开左侧粗细滑块），换算到画布布局框坐标
+  const getCommentEditorBounds = () => {
+    const view = viewRef.current!
+    const viewRect = view.getBoundingClientRect()
+    const frameRect = frameRef.current!.getBoundingClientRect()
+    const style = getComputedStyle(view)
+    return {
+      left: viewRect.left + parseFloat(style.paddingLeft) - frameRect.left,
+      right: viewRect.right - parseFloat(style.paddingRight) - frameRect.left,
+      bottom: viewRect.bottom - frameRect.top,
+    }
+  }
   const swatchClass = (active: boolean) => `h-7 w-7 flex-none rounded-full transition-transform hover:scale-110 ${
     active ? 'ring-2 ring-blue-500 ring-offset-2 ring-offset-white dark:ring-offset-gray-900' : 'ring-1 ring-inset ring-black/10 dark:ring-white/15'
   }`
@@ -1050,9 +1062,8 @@ function SketchBoardEditor({ baseImageSrc, replaceImageId }: SketchBoardRequest)
                 docSize={docSize}
                 viewScale={viewScale}
                 offset={viewport.transform}
-                boundsRight={activeCommentId && viewRef.current && frameRef.current
-                  ? viewRef.current.getBoundingClientRect().right - frameRef.current.getBoundingClientRect().left
-                  : Infinity}
+                bounds={activeCommentId ? getCommentEditorBounds() : null}
+                interactive={tool === 'comment' || tool === 'select'}
                 canOpen={tool === 'comment'}
                 toDocPoint={toDocPoint}
                 onMove={moveComment}

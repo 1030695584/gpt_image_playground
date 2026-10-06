@@ -796,7 +796,7 @@ function LightboxInner({ src, comments, imageId, maskPreviewSrc, onClose, showNa
               }}
             >
               <CommentPin index={idx} className="flex-none" />
-              <span className="w-max max-w-[16rem] break-words rounded-2xl bg-white/95 px-3 py-1.5 text-xs leading-snug text-gray-800 shadow-md backdrop-blur-sm dark:bg-gray-800/95 dark:text-gray-100">
+              <span className="w-max max-w-[16rem] break-words rounded-xl border border-gray-200/80 bg-white/95 px-2.5 py-1.5 text-xs leading-snug text-gray-800 shadow-lg backdrop-blur-md dark:border-white/[0.08] dark:bg-gray-800/95 dark:text-gray-100">
                 {comment.text}
               </span>
             </div>

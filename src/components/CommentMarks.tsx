@@ -1,14 +1,15 @@
 import type { HTMLAttributes } from 'react'
 
-export const COMMENT_PIN_SIZE = 28
+export const COMMENT_PIN_SIZE = 26
 
 /** 评论气泡，左下尖角指向评论位置；画板与图片预览共用 */
 export function CommentPin({ index, active = false, className = '', style, ...props }: HTMLAttributes<HTMLDivElement> & { index: number; active?: boolean }) {
   return (
     <div
       {...props}
-      className={`flex select-none items-center justify-center rounded-full rounded-bl-[4px] text-xs font-semibold text-white shadow-md ring-2 ring-white transition-colors dark:ring-gray-900 ${
-        active ? 'bg-blue-600' : 'bg-blue-500'
+      // 选中时以尖角为原点放大，尖角位置不变；深浅色下都用白色描边，在任意底图上都清晰
+      className={`flex origin-bottom-left select-none items-center justify-center rounded-full rounded-bl-[3px] bg-blue-500 text-[11px] font-semibold tabular-nums text-white shadow-[0_2px_6px_rgba(0,0,0,0.25)] ring-2 ring-white transition-transform ${
+        active ? 'scale-110' : ''
       } ${className}`}
       style={{ width: COMMENT_PIN_SIZE, height: COMMENT_PIN_SIZE, ...style }}
     >

@@ -8,10 +8,33 @@ import { TrashIcon } from './icons'
 
 const EDITOR_WIDTH = 280
 const EDITOR_HEIGHT = 44
+const EDITOR_GAP = 8
+
+export interface CommentEditorBounds {
+  left: number
+  right: number
+  bottom: number
+}
+
+/**
+ * 输入框位置：优先放在气泡右侧，其次左侧，左右都放不下（如手机竖屏）时放到气泡下方或上方，
+ * 并限制在可见区域内。坐标相对画布布局框。
+ */
+function getEditorPosition(x: number, y: number, bounds: CommentEditorBounds) {
+  const width = Math.min(EDITOR_WIDTH, bounds.right - bounds.left)
+  const centerTop = y - COMMENT_PIN_SIZE / 2 - EDITOR_HEIGHT / 2
+  const rightLeft = x + COMMENT_PIN_SIZE + EDITOR_GAP
+  if (rightLeft + width <= bounds.right) return { left: rightLeft, top: centerTop, width }
+  const leftLeft = x - EDITOR_GAP - width
+  if (leftLeft >= bounds.left) return { left: leftLeft, top: centerTop, width }
+  const left = Math.min(Math.max(x + COMMENT_PIN_SIZE / 2 - width / 2, bounds.left), bounds.right - width)
+  const below = y + EDITOR_GAP
+  return { left, top: below + EDITOR_HEIGHT <= bounds.bottom ? below : y - COMMENT_PIN_SIZE - EDITOR_GAP - EDITOR_HEIGHT, width }
+}
 
 /**
  * 画板评论气泡层：气泡按屏幕像素固定大小，不随画布缩放；
- * 任意工具下都可拖动气泡，评论工具下点击气泡会展开输入框。
+ * 只有选择工具和评论工具能拖动气泡，评论工具下点击气泡会展开输入框，其余工具下气泡不拦截指针。
  */
 export default function SketchCommentLayer({
   comments,
@@ -19,7 +42,8 @@ export default function SketchCommentLayer({
   docSize,
   viewScale,
   offset,
-  boundsRight,
+  bounds,
+  interactive,
   canOpen,
   toDocPoint,
   onMove,
@@ -35,8 +59,9 @@ export default function SketchCommentLayer({
   viewScale: number
   /** 画布平移量，气泡位置 = 文档坐标 × viewScale + offset */
   offset: SketchPoint
-  /** 可见区域右边界（相对画布布局框），输入框放不下时改到气泡左侧 */
-  boundsRight: number
+  /** 输入框可放置的可见区域（相对画布布局框），仅在编辑时提供 */
+  bounds: CommentEditorBounds | null
+  interactive: boolean
   canOpen: boolean
   toDocPoint: (event: { clientX: number; clientY: number }) => SketchPoint
   onMove: (id: string, x: number, y: number) => void
@@ -85,6 +110,7 @@ export default function SketchCommentLayer({
     y: comment.y * docSize.height * viewScale + offset.y,
   })
   const activePosition = active && getPosition(active)
+  const editorPosition = activePosition && bounds ? getEditorPosition(activePosition.x, activePosition.y, bounds) : null
 
   return (
     <>
@@ -95,7 +121,7 @@ export default function SketchCommentLayer({
             key={comment.id}
             index={idx}
             active={comment.id === activeId}
-            className="absolute z-10 touch-none"
+            className={`absolute z-10 touch-none ${interactive ? '' : 'pointer-events-none'}`}
             style={{ left: x, top: y - COMMENT_PIN_SIZE, cursor: canOpen ? 'pointer' : 'grab' }}
             onPointerDown={(event) => handlePointerDown(event, comment.id)}
             onPointerMove={handlePointerMove}
@@ -105,16 +131,10 @@ export default function SketchCommentLayer({
         )
       })}
       {/* 只渲染一个编辑框，切换评论时复用同一元素，避免卸载触发失焦把新打开的评论关掉 */}
-      {active && activePosition && (
+      {active && editorPosition && (
         <div
-          className="absolute z-20 flex items-center gap-1 rounded-full border border-gray-200/80 bg-white/95 p-1 shadow-lg backdrop-blur-md focus-within:border-blue-400 dark:border-white/[0.08] dark:bg-gray-800/95 dark:focus-within:border-blue-400/60"
-          style={{
-            // 与气泡垂直居中对齐，右侧放不下时改到气泡左侧
-            left: activePosition.x + COMMENT_PIN_SIZE + 8 + EDITOR_WIDTH > boundsRight ? activePosition.x - EDITOR_WIDTH - 8 : activePosition.x + COMMENT_PIN_SIZE + 8,
-            top: activePosition.y - COMMENT_PIN_SIZE / 2 - EDITOR_HEIGHT / 2,
-            width: EDITOR_WIDTH,
-            height: EDITOR_HEIGHT,
-          }}
+          className="absolute z-20 flex items-center gap-1 rounded-2xl border border-gray-200/80 bg-white/95 p-1.5 shadow-xl backdrop-blur-md animate-fade-in dark:border-white/[0.08] dark:bg-gray-800/95"
+          style={{ ...editorPosition, height: EDITOR_HEIGHT }}
           onPointerDown={(event) => event.stopPropagation()}
           // 点击两侧按钮时不让输入框失焦，由按钮自己决定删除或收起
           onMouseDown={(event) => {
@@ -124,7 +144,7 @@ export default function SketchCommentLayer({
           <TooltipButton
             tooltip="删除评论"
             wrapperClassName="relative inline-flex flex-none"
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100 text-gray-500 transition hover:bg-red-50 hover:text-red-500 dark:bg-white/[0.08] dark:text-gray-300 dark:hover:bg-red-500/15 dark:hover:text-red-400"
+            className="flex h-8 w-8 items-center justify-center rounded-xl text-gray-500 transition hover:bg-red-50 hover:text-red-500 dark:text-gray-400 dark:hover:bg-red-500/15 dark:hover:text-red-400"
             onClick={() => onDelete(active.id)}
           >
             <TrashIcon className="h-4 w-4" />
@@ -144,7 +164,7 @@ export default function SketchCommentLayer({
           <TooltipButton
             tooltip="完成"
             wrapperClassName="relative inline-flex flex-none"
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-500 text-white shadow-sm transition hover:bg-blue-600"
+            className="flex h-8 w-8 items-center justify-center rounded-xl bg-blue-500 text-white shadow-sm transition hover:bg-blue-600"
             onClick={onFinish}
           >
             <CheckIcon />
