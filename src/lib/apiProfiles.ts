@@ -14,6 +14,7 @@ import type {
   CustomProviderResultMapping,
   CustomProviderSubmitMapping,
   CustomProviderTemplate,
+  ReferenceImageEditAction,
 } from '../types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, DEFAULT_ZIP_DOWNLOAD_ROUTES, ZIP_DOWNLOAD_ROUTE_VALUES } from '../types'
 import { customProviderSupportsNativeTransparentBackground } from './customProviderCapabilities'
@@ -124,6 +125,10 @@ export function getDefaultApiProfileId(settings: Partial<AppSettings> | unknown)
   const marked = profiles.find((profile) => profile.isDefault === true && typeof profile.id === 'string')
   if (marked && typeof marked.id === 'string') return marked.id
   return null
+}
+
+function normalizeReferenceImageEditAction(value: unknown): ReferenceImageEditAction {
+  return value === 'sketch' || value === 'mask' ? value : 'ask'
 }
 
 function normalizeZipDownloadRoutes(value: unknown) {
@@ -725,6 +730,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     allowPromptRewrite: typeof record.allowPromptRewrite === 'boolean' ? record.allowPromptRewrite : false,
     taskCompletionNotification: typeof record.taskCompletionNotification === 'boolean' ? record.taskCompletionNotification : false,
     enterSubmit: typeof record.enterSubmit === 'boolean' ? record.enterSubmit : false,
+    referenceImageEditAction: normalizeReferenceImageEditAction(record.referenceImageEditAction),
     zipDownloadRoutes: normalizeZipDownloadRoutes(record.zipDownloadRoutes),
     agentScrollToBottomAfterSubmit: typeof record.agentScrollToBottomAfterSubmit === 'boolean' ? record.agentScrollToBottomAfterSubmit : true,
     agentMaxToolRounds: normalizeAgentMaxToolRounds(record.agentMaxToolRounds),
@@ -1282,6 +1288,7 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   allowPromptRewrite: false,
   taskCompletionNotification: false,
   enterSubmit: false,
+  referenceImageEditAction: 'ask',
   zipDownloadRoutes: DEFAULT_ZIP_DOWNLOAD_ROUTES,
   agentScrollToBottomAfterSubmit: true,
   agentMaxToolRounds: DEFAULT_AGENT_MAX_TOOL_ROUNDS,

@@ -1,30 +1,29 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, removeMultipleTasks, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
-import { DEFAULT_PARAMS, type TaskRecord } from '../types'
+import { DEFAULT_PARAMS, MAX_INPUT_IMAGES, type TaskRecord } from '../types'
 import { getActiveAgentRounds } from '../lib/agentConversationState'
 import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { getImageGenerationModel, isGptImage25Model } from '../lib/imageModels'
 import { ensureImageCached, getCachedImage } from '../lib/imageCache'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
-import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
+import { getAtImageQuery, getImageComments, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { normalizeCodexCliImageSize, normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { getSafeBoundingClientRect } from '../lib/domRect'
+import { suppressGlobalClicks } from '../lib/clickSuppression'
 import { collectAgentRoundOutputImageSlots } from '../lib/agentImageReferences'
 import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds } from '../lib/favoriteState'
 import { getContentEditableCursor, getContentEditablePlainText, getContentEditableSelection, getMentionTagHtml, setContentEditableCursor, setContentEditableSelection, syncMentionTagSelection } from '../lib/contentEditableMentions'
 import { useHintTooltip } from '../hooks/useHintTooltip'
 import { downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getTaskOutputImageZipEntries } from '../lib/downloadImages'
 import SizePickerModal from './SizePickerModal'
-import { CloseIcon, CollapseIcon, ExpandIcon } from './icons'
+import { CloseIcon, CollapseIcon, ExpandIcon, SketchIcon } from './icons'
+import { CommentBadge } from './CommentMarks'
 import ButtonTooltip from './input/buttonTooltip'
 import DragUploadOverlay from './input/dragUploadOverlay'
 import InputBatchBars from './input/inputBatchBars'
 import InputParamsPanel from './input/inputParamsPanel'
-
-/** API 支持的最大参考图数量 */
-const API_MAX_IMAGES = 16
 
 function getFavoriteCollectionTasksForBatch(collectionId: string, tasks: TaskRecord[], defaultFavoriteCollectionId: string | null) {
   const favoriteTasks = tasks.filter((task) => task.isFavorite)
@@ -89,6 +88,7 @@ export default function InputBar() {
   const setPrompt = useStore((s) => s.setPrompt)
   const inputImages = useStore((s) => s.inputImages)
   const addInputImage = useStore((s) => s.addInputImage)
+  const setSketchBoard = useStore((s) => s.setSketchBoard)
   const removeInputImage = useStore((s) => s.removeInputImage)
   const clearInputImages = useStore((s) => s.clearInputImages)
   const params = useStore((s) => s.params)
@@ -328,7 +328,7 @@ export default function InputBar() {
   const [imageHintId, setImageHintId] = useState<string | null>(null)
   const [mobileCollapsed, setMobileCollapsed] = useState(false)
   const [showSizePicker, setShowSizePicker] = useState(false)
-  const [showMobileUploadMenu, setShowMobileUploadMenu] = useState(false)
+  const [showUploadMenu, setShowUploadMenu] = useState(false)
   const [maskPreviewUrl, setMaskPreviewUrl] = useState('')
   const [imageDragIndex, setImageDragIndex] = useState<number | null>(null)
   const [imageDragOverIndex, setImageDragOverIndex] = useState<number | null>(null)
@@ -493,8 +493,8 @@ export default function InputBar() {
         ]
       : []),
   ]
-  const atImageLimit = inputImages.length >= API_MAX_IMAGES
-  const uploadImageTooltipText = atImageLimit ? `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加` : '上传图片'
+  const atImageLimit = inputImages.length >= MAX_INPUT_IMAGES
+  const uploadImageTooltipText = atImageLimit ? `参考图数量已达上限（${MAX_INPUT_IMAGES} 张），无法继续添加` : '添加图片'
   const transparentOutputHint = useHintTooltip()
   const handleTransparentOutputMenuOpenChange = useCallback((open: boolean) => {
     if (open) transparentOutputHint.hide()
@@ -799,15 +799,15 @@ export default function InputBar() {
   const handleFiles = async (files: FileList | File[]) => {
     try {
       const currentCount = useStore.getState().inputImages.length
-      if (currentCount >= API_MAX_IMAGES) {
+      if (currentCount >= MAX_INPUT_IMAGES) {
         useStore.getState().showToast(
-          `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`,
+          `参考图数量已达上限（${MAX_INPUT_IMAGES} 张），无法继续添加`,
           'error',
         )
         return
       }
 
-      const remaining = API_MAX_IMAGES - currentCount
+      const remaining = MAX_INPUT_IMAGES - currentCount
       const accepted = Array.from(files).filter((f) => f.type.startsWith('image/'))
       const toAdd = accepted.slice(0, remaining)
       const discarded = accepted.length - toAdd.length
@@ -818,7 +818,7 @@ export default function InputBar() {
 
       if (discarded > 0) {
         useStore.getState().showToast(
-          `已达上限 ${API_MAX_IMAGES} 张，${discarded} 张图片被丢弃`,
+          `已达上限 ${MAX_INPUT_IMAGES} 张，${discarded} 张图片被丢弃`,
           'error',
         )
       }
@@ -1114,6 +1114,11 @@ export default function InputBar() {
 
       const range = getContentEditableSelection(el)
       setCursorPos(range.start)
+      // 记到 store 中，画板等弹窗关闭后可把评论胶囊插回这里，并覆盖选中的内容；
+      // 只记录完全落在输入框内的选区，整页全选或拖选越界时不能当成要覆盖的范围
+      if (el.contains(domRange.startContainer) && el.contains(domRange.endContainer)) {
+        useStore.getState().setPromptSelection(range)
+      }
       syncMentionTagSelection(el)
 
       const rangeRect = domRange.getBoundingClientRect()
@@ -1124,6 +1129,23 @@ export default function InputBar() {
     document.addEventListener('selectionchange', handleSelectionChange)
     return () => document.removeEventListener('selectionchange', handleSelectionChange)
   }, [])
+
+  // 输入栏卡片带 backdrop-blur，fixed 遮罩只能覆盖卡片内部，因此改为监听全局按下来关闭菜单，
+  // 并吞掉随后的点击，避免关闭菜单时误触发外部按钮
+  useEffect(() => {
+    if (!showUploadMenu) return
+    const closeMenu = (event: Event) => {
+      if (event.target instanceof Element && event.target.closest('[data-add-image-menu]')) return
+      suppressGlobalClicks()
+      setShowUploadMenu(false)
+    }
+    window.addEventListener('mousedown', closeMenu, { capture: true })
+    window.addEventListener('touchstart', closeMenu, { capture: true })
+    return () => {
+      window.removeEventListener('mousedown', closeMenu, { capture: true })
+      window.removeEventListener('touchstart', closeMenu, { capture: true })
+    }
+  }, [showUploadMenu])
 
   // 点击外部时使 input 栏失焦
   useEffect(() => {
@@ -1261,6 +1283,7 @@ export default function InputBar() {
 
   const renderImageThumb = (img: (typeof inputImages)[number], idx: number) => {
     const isMaskTarget = maskDraft?.targetImageId === img.id
+    const commentCount = getImageComments(prompt, idx).length
     const imageHintText = isMaskTarget ? '遮罩图必须为第一张图' : ''
     const displaySrc = isMaskTarget && maskPreviewUrl ? maskPreviewUrl : img.dataUrl
     const isImageDragging = imageDragIndex === idx
@@ -1385,16 +1408,19 @@ export default function InputBar() {
         onContextMenu={(e) => {
           e.preventDefault()
           const el = textareaRef.current
-          const cursor = el ? getContentEditableCursor(el) : prompt.length
+          // 按输入框最后的选区插入，选中了其他内容（包括胶囊）时直接覆盖
+          const visibleLength = stripImageMentionMarkers(prompt).length
+          const recorded = useStore.getState().promptSelection
+          const selection = recorded?.prompt === prompt ? recorded : { start: visibleLength, end: visibleLength }
           if (el) {
             el.focus()
-            setContentEditableCursor(el, cursor)
+            setContentEditableSelection(el, selection.start, selection.end)
             if (document.execCommand('insertHTML', false, getMentionTagHtml(getImageMentionLabel(idx)))) {
               syncPromptFromContentEditable()
               return
             }
           }
-          const next = insertImageMentionAtVisibleRange(prompt, cursor, cursor, idx)
+          const next = insertImageMentionAtVisibleRange(prompt, selection.start, selection.end, idx)
           isUserInputRef.current = false
           setPrompt(next.prompt)
           window.setTimeout(() => {
@@ -1417,13 +1443,13 @@ export default function InputBar() {
         )}
         <div
           className={`relative w-[52px] h-[52px] rounded-xl overflow-hidden shadow-sm cursor-grab active:cursor-grabbing select-none ${
-            isMaskTarget
+            isMaskTarget || commentCount > 0
               ? 'border-2 border-blue-500'
               : 'border border-gray-200 dark:border-white/[0.08]'
           }`}
           onClick={() => {
             if (suppressImageClickRef.current) return
-            setLightboxImageId(img.id, inputImages.map((i) => i.id))
+            setLightboxImageId(img.id, inputImages.map((i) => i.id), prompt)
           }}
         >
           {displaySrc && (
@@ -1440,6 +1466,7 @@ export default function InputBar() {
               MASK
             </span>
           )}
+          {commentCount > 0 && <CommentBadge count={commentCount} className={isMaskTarget ? 'left-1 top-[18px]' : 'left-1 top-1'} />}
           <span className="absolute bottom-1 left-1 flex h-4 w-4 items-center justify-center rounded-full bg-black/55 text-[9px] font-semibold text-white backdrop-blur-sm z-10 pointer-events-none">
             {idx + 1}
           </span>
@@ -1447,7 +1474,7 @@ export default function InputBar() {
             className="absolute inset-0 w-full h-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer z-20 focus:outline-none border-none"
             onClick={(e) => {
               e.stopPropagation()
-              setLightboxImageId(img.id, inputImages.map((i) => i.id))
+              setLightboxImageId(img.id, inputImages.map((i) => i.id), prompt)
             }}
             title="查看"
             aria-label="查看参考图"
@@ -1474,6 +1501,83 @@ export default function InputBar() {
       </div>
     )
   }
+
+  // 桌面端与移动端共用的“添加图片”按钮与菜单，移动端额外提供拍照
+  const renderAddImageButton = (mobile: boolean) => (
+    <div
+      data-add-image-menu
+      className="relative flex-shrink-0"
+      onMouseEnter={() => setAttachHover(true)}
+      onMouseLeave={() => setAttachHover(false)}
+    >
+      {!mobile && <ButtonTooltip visible={attachHover && !showUploadMenu} text={uploadImageTooltipText} />}
+      <button
+        onClick={() => {
+          if (atImageLimit) return
+          setAttachHover(false)
+          setShowUploadMenu(!showUploadMenu)
+        }}
+        className={`p-2.5 rounded-xl transition-all shadow-sm ${
+          atImageLimit
+            ? 'bg-gray-200 dark:bg-white/[0.04] text-gray-300 dark:text-gray-500 cursor-not-allowed'
+            : 'bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 hover:shadow'
+        }`}
+        aria-label={uploadImageTooltipText}
+        aria-expanded={showUploadMenu}
+      >
+        <svg
+          className={`w-5 h-5 transition-transform duration-200 ${showUploadMenu ? 'rotate-45' : ''}`}
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+        </svg>
+      </button>
+
+      {showUploadMenu && (
+        <div className={`absolute bottom-full ${mobile ? 'left-0' : 'right-0'} mb-2 w-32 bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-2 duration-200`}>
+          {mobile && (
+            <button
+              className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
+              onClick={() => {
+                setShowUploadMenu(false)
+                cameraInputRef.current?.click()
+              }}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              拍照
+            </button>
+          )}
+          <button
+            className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
+            onClick={() => {
+              setShowUploadMenu(false)
+              fileInputRef.current?.click()
+            }}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+            </svg>
+            上传图片
+          </button>
+          <button
+            className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
+            onClick={() => {
+              setShowUploadMenu(false)
+              setSketchBoard({ baseImageSrc: null })
+            }}
+          >
+            <SketchIcon className="w-4 h-4" />
+            画板
+          </button>
+        </div>
+      )}
+    </div>
+  )
 
   const renderClearAllButton = () => (
     <button
@@ -1565,7 +1669,7 @@ export default function InputBar() {
 
   return (
     <>
-      <DragUploadOverlay visible={isDragging} atImageLimit={atImageLimit} maxImages={API_MAX_IMAGES} />
+      <DragUploadOverlay visible={isDragging} atImageLimit={atImageLimit} maxImages={MAX_INPUT_IMAGES} />
 
       {showSizePicker && (
         <SizePickerModal
@@ -1777,26 +1881,7 @@ export default function InputBar() {
               {renderParams('grid-cols-6')}
 
               <div className="flex gap-2 flex-shrink-0 mb-0.5">
-                <div
-                  className="relative"
-                  onMouseEnter={() => setAttachHover(true)}
-                  onMouseLeave={() => setAttachHover(false)}
-                >
-                  <ButtonTooltip visible={attachHover} text={uploadImageTooltipText} />
-                  <button
-                    onClick={() => !atImageLimit && fileInputRef.current?.click()}
-                    className={`p-2.5 rounded-xl transition-all shadow-sm ${
-                      atImageLimit
-                        ? 'bg-gray-200 dark:bg-white/[0.04] text-gray-300 dark:text-gray-500 cursor-not-allowed'
-                        : 'bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 hover:shadow'
-                    }`}
-                    aria-label={uploadImageTooltipText}
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-                    </svg>
-                  </button>
-                </div>
+                {renderAddImageButton(false)}
                 <div
                   className="relative"
                   onMouseEnter={() => setSubmitHover(true)}
@@ -1839,71 +1924,7 @@ export default function InputBar() {
               </div>
 
               <div className="flex items-center gap-2">
-                <div
-                  className="relative"
-                  onMouseEnter={() => setAttachHover(true)}
-                  onMouseLeave={() => setAttachHover(false)}
-                >
-                  <button
-                    onClick={() => {
-                      if (!atImageLimit) {
-                        setShowMobileUploadMenu(!showMobileUploadMenu)
-                      }
-                    }}
-                    className={`p-2.5 rounded-xl transition-all shadow-sm flex-shrink-0 ${
-                      atImageLimit
-                        ? 'bg-gray-200 dark:bg-white/[0.04] text-gray-300 dark:text-gray-500 cursor-not-allowed'
-                        : 'bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300'
-                    }`}
-                    aria-label={uploadImageTooltipText}
-                  >
-                    <svg
-                      className={`w-5 h-5 transition-transform duration-200 ${showMobileUploadMenu ? 'rotate-90' : ''}`}
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                    </svg>
-                  </button>
-
-                  {/* Mobile Upload Menu */}
-                  {showMobileUploadMenu && (
-                    <>
-                      <div
-                        className="fixed inset-0 z-40"
-                        onClick={() => setShowMobileUploadMenu(false)}
-                      />
-                      <div className="absolute bottom-full left-0 mb-2 w-32 bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                        <button
-                          className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
-                          onClick={() => {
-                            setShowMobileUploadMenu(false)
-                            cameraInputRef.current?.click()
-                          }}
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                          </svg>
-                          拍照
-                        </button>
-                        <button
-                          className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
-                          onClick={() => {
-                            setShowMobileUploadMenu(false)
-                            fileInputRef.current?.click()
-                          }}
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                          </svg>
-                          上传图片
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
+                {renderAddImageButton(true)}
                 <div
                   className="relative flex-1"
                   onMouseEnter={() => setSubmitHover(true)}

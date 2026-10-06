@@ -1,22 +1,25 @@
 import { useEffect, useMemo, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { AgentMessage, AgentRound, TaskRecord } from '../types'
 import { editOutputs, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, reuseConfig, useStore } from '../store'
-import { getActiveAgentRounds, getAgentBranchLeafId, getConversationSearchText, getAgentRoundTaskIds, getAgentSiblingRounds } from '../lib/agentConversationState'
+import { getActiveAgentRounds, getAgentBranchLeafId, getAgentRoundPath, getConversationSearchText, getAgentRoundTaskIds, getAgentSiblingRounds } from '../lib/agentConversationState'
 import { ensureImageCached, getCachedImage } from '../lib/imageCache'
-import { getPromptMentionParts } from '../lib/promptImageMentions'
+import { getImageComments, getPromptMentionParts } from '../lib/promptImageMentions'
+import { replaceAgentPromptImageReferencesForApi } from '../lib/agentImageReferences'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import type { AgentWebSearchStatus } from '../lib/agentWebSearch'
 import { getAgentAssistantBlocks, getAgentAssistantCopyContent, getRoundTaskSlots } from '../lib/agentAssistantBlocks'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { downloadImageEntriesAsZip, downloadImageIds, getImageZipEntries } from '../lib/downloadImages'
 import TaskCard from './TaskCard'
+import { CommentBadge } from './CommentMarks'
 import MarkdownRenderer from './MarkdownRenderer'
 import { TooltipButton as AgentActionButton } from './TooltipButton'
 import { TrashIcon, DownloadIcon, EditIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, SidebarLeftIcon, FavoriteIcon, CloseIcon, CopyIcon, RefreshIcon, ArrowDownIcon } from './icons'
 
-function ChatImageThumb({ imageId, imageIndex, maskImageId }: { imageId: string; imageIndex: number; maskImageId?: string | null }) {
+function ChatImageThumb({ imageId, imageIndex, maskImageId, round }: { imageId: string; imageIndex: number; maskImageId?: string | null; round: AgentRound }) {
   const [src, setSrc] = useState<string>(() => getCachedImage(imageId) || '')
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
+  const commentCount = getImageComments(round.prompt, imageIndex).length
 
   useEffect(() => {
     let cancelled = false
@@ -50,9 +53,9 @@ function ChatImageThumb({ imageId, imageIndex, maskImageId }: { imageId: string;
   return (
     <div 
       className={`relative h-16 w-16 shrink-0 overflow-hidden rounded-lg shadow-sm cursor-pointer transition-opacity hover:opacity-90 ${
-        maskImageId ? 'border-2 border-blue-500' : 'border border-gray-200 dark:border-white/[0.08]'
+        maskImageId || commentCount > 0 ? 'border-2 border-blue-500' : 'border border-gray-200 dark:border-white/[0.08]'
       }`}
-      onClick={() => setLightboxImageId(imageId, [imageId])}
+      onClick={() => setLightboxImageId(imageId, round.inputImageIds, round.prompt)}
     >
       {src ? <img src={src} className="h-full w-full object-cover" alt="" /> : <div className="h-full w-full bg-gray-100 dark:bg-white/[0.04]" />}
       {maskImageId && (
@@ -60,6 +63,7 @@ function ChatImageThumb({ imageId, imageIndex, maskImageId }: { imageId: string;
           MASK
         </span>
       )}
+      {commentCount > 0 && <CommentBadge count={commentCount} className={maskImageId ? 'left-1 top-[18px]' : 'left-1 top-1'} />}
       <span className="absolute bottom-1 left-1 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-black/55 text-[9px] font-semibold text-white backdrop-blur-sm pointer-events-none">
         {imageIndex + 1}
       </span>
@@ -812,6 +816,7 @@ export default function AgentWorkspace() {
                               imageId={imgId}
                               imageIndex={imageIndex}
                               maskImageId={imgId === (round.maskTargetImageId ?? round.inputImageIds[0]) ? round.maskImageId : null}
+                              round={round}
                             />
                           ))}
                       </div>
@@ -981,7 +986,8 @@ export default function AgentWorkspace() {
                         ) : (
                           <>
                             <AgentActionButton tooltip="复制提示词" className="p-1.5 rounded-md hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-200/50 dark:hover:bg-white/[0.04] transition-colors" onClick={() => {
-                              void handleCopyMessage(message.content);
+                              // 与画廊一致，复制实际发送给接口的文字
+                              void handleCopyMessage(round ? replaceAgentPromptImageReferencesForApi(message.content, round, getAgentRoundPath(conversation, round.id), tasks) : message.content);
                             }}>
                               <CopyIcon className="w-4 h-4" />
                             </AgentActionButton>

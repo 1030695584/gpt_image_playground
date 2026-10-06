@@ -13,6 +13,7 @@ import type {
   TaskParams,
   InputImage,
   MaskDraft,
+  SketchBoardRequest,
   TaskRecord,
   FavoriteCollection,
   ResponsesOutputItem,
@@ -23,7 +24,7 @@ import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
 import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, mergeImportedSettings, mergePresetImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPresetProviderIds, isPresetConfigDeletionPrevented, isPresetConfigOnlyEnabled, isPresetConfigParamsLocked, isPresetProfile, isPresetProviderDeletionPrevented } from './lib/presetConfig'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
-import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
+import { getTaskPromptText, remapImageMentionsForOrder, replaceImageMentionsForApi, stripImageMentionMarkers } from './lib/promptImageMentions'
 import {
   getAllTasks,
   putTask as dbPutTask,
@@ -294,6 +295,12 @@ interface AppState {
   // 输入
   prompt: string
   setPrompt: (p: string) => void
+  /**
+   * 输入框最后一次的选区（可见文本偏移），供画板等外部入口插入胶囊并覆盖选中内容；未聚焦过时为 null。
+   * 同时记下当时的提示词，提示词被其他途径替换后选区即失效，使用前需比对。
+   */
+  promptSelection: { start: number; end: number; prompt: string } | null
+  setPromptSelection: (selection: { start: number; end: number }) => void
   inputImages: InputImage[]
   addInputImage: (img: InputImage) => void
   replaceInputImage: (idx: number, img: InputImage) => void
@@ -384,7 +391,12 @@ interface AppState {
   setDetailTaskId: (id: string | null) => void
   lightboxImageId: string | null
   lightboxImageList: string[]
-  setLightboxImageId: (id: string | null, list?: string[]) => void
+  /** 预览参考图时对应的提示词，按图片在列表中的位置取其评论；为空时不显示评论 */
+  lightboxCommentPrompt: string | null
+  setLightboxImageId: (id: string | null, list?: string[], commentPrompt?: string | null) => void
+  /** 画板；baseImageSrc 为画布底图，replaceImageId 为完成后要替换的参考图 */
+  sketchBoard: SketchBoardRequest | null
+  setSketchBoard: (board: SketchBoardRequest | null) => void
   showSettings: boolean
   settingsTabRequest: SettingsTab | null
   setShowSettings: (v: boolean, tab?: SettingsTab) => void
@@ -681,6 +693,8 @@ export const useStore = create<AppState>()(
       // Input
       prompt: '',
       setPrompt: (prompt) => set((s) => syncActiveInputDraft(s, { prompt })),
+      promptSelection: null,
+      setPromptSelection: (selection) => set((s) => ({ promptSelection: { ...selection, prompt: s.prompt } })),
       inputImages: [],
       addInputImage: (img) =>
         set((s) => {
@@ -974,9 +988,19 @@ export const useStore = create<AppState>()(
       },
       lightboxImageId: null,
       lightboxImageList: [],
-      setLightboxImageId: (lightboxImageId, list) => {
+      lightboxCommentPrompt: null,
+      setLightboxImageId: (lightboxImageId, list, commentPrompt = null) => {
         if (lightboxImageId) dismissAllTooltips()
-        set({ lightboxImageId, lightboxImageList: list ?? (lightboxImageId ? [lightboxImageId] : []) })
+        set({
+          lightboxImageId,
+          lightboxImageList: list ?? (lightboxImageId ? [lightboxImageId] : []),
+          lightboxCommentPrompt: lightboxImageId ? commentPrompt : null,
+        })
+      },
+      sketchBoard: null,
+      setSketchBoard: (sketchBoard) => {
+        if (sketchBoard) dismissAllTooltips()
+        set({ sketchBoard })
       },
       showSettings: false,
       settingsTabRequest: null,
@@ -1142,7 +1166,7 @@ export function taskMatchesFilterStatus(task: TaskRecord, filterStatus: AppState
 export function taskMatchesSearchQuery(task: TaskRecord, query: string) {
   const q = query.trim().toLowerCase()
   if (!q) return true
-  const prompt = (task.prompt || '').toLowerCase()
+  const prompt = getTaskPromptText(task.prompt || '', task.inputImageIds.length).toLowerCase()
   const paramStr = JSON.stringify(task.params).toLowerCase()
   const errorStr = [task.error, ...(task.outputErrors ?? []).map((item) => item.error)].filter(Boolean).join('\n').toLowerCase()
   return prompt.includes(q) || paramStr.includes(q) || errorStr.includes(q)
@@ -1944,7 +1968,7 @@ async function generateAgentConversationTitle(
 
     updateAgentConversation(conversationId, (current) => {
       const firstRound = current.rounds[0]
-      if (!firstRound || firstRound.prompt !== prompt || current.title !== fallbackTitle) return current
+      if (!firstRound || stripImageMentionMarkers(firstRound.prompt) !== prompt || current.title !== fallbackTitle) return current
       return { ...current, title, updatedAt: Date.now() }
     })
   } catch {
@@ -2400,7 +2424,7 @@ export async function submitAgentMessage() {
 
   let fallbackTitle: string | null = null
   updateAgentConversation(conversation.id, (current) => {
-    const nextTitle = current.rounds.length === 0 ? createAgentConversationTitle(trimmedPrompt, current.title) : current.title
+    const nextTitle = current.rounds.length === 0 ? createAgentConversationTitle(stripImageMentionMarkers(trimmedPrompt), current.title) : current.title
     if (current.rounds.length === 0) fallbackTitle = nextTitle
     const messages = shouldAppendToEditingRound
       ? current.messages.some((message) => message.id === userMessageId)
@@ -2432,7 +2456,7 @@ export async function submitAgentMessage() {
   state.setAgentEditingRoundId(null)
 
   if (fallbackTitle) {
-    void generateAgentConversationTitle(conversation.id, trimmedPrompt, inputImageIds, requestSettings, activeProfile, fallbackTitle)
+    void generateAgentConversationTitle(conversation.id, stripImageMentionMarkers(trimmedPrompt), inputImageIds, requestSettings, activeProfile, fallbackTitle)
   }
 
   void executeAgentRound(conversation.id, roundId, normalizedParams, requestSettings, activeProfile, imageProfile)
@@ -3887,7 +3911,8 @@ export async function reuseConfig(task: TaskRecord) {
     }
   }
   setInputImages(imgs)
-  setPrompt(task.prompt)
+  // 部分参考图可能已被删除，按图片 id 重新对齐提示词中的图片序号，避免评论和提及错位到其他图片
+  setPrompt(remapImageMentionsForOrder(task.prompt, task.inputImageIds.map((id) => ({ id, dataUrl: '' })), useStore.getState().inputImages))
   const maskTargetImageId = task.maskTargetImageId ?? (task.maskImageId ? task.inputImageIds[0] : null)
   if (maskTargetImageId && task.maskImageId && imgs.some((img) => img.id === maskTargetImageId)) {
     const maskDataUrl = await ensureImageCached(task.maskImageId)

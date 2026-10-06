@@ -6,6 +6,7 @@ import { formatImageRatio } from '../lib/size'
 import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
 import { DEFAULT_FAL_MODEL, DEFAULT_IMAGES_MODEL } from '../lib/apiProfiles'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
+import { getTaskPromptText } from '../lib/promptImageMentions'
 import { CodeIcon, TransparentBgIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
 
@@ -546,7 +547,7 @@ export default function TaskCard({
               </div>
             ) : (
               <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3">
-                {task.prompt || '(无提示词)'}
+                {getTaskPromptText(task.prompt, task.inputImageIds.length) || '(无提示词)'}
               </p>
             )}
           </div>

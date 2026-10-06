@@ -20,6 +20,8 @@ export type ApiProvider = BuiltInApiProvider | string
 export type CustomProviderTemplate = 'http-image'
 export const DEFAULT_STREAM_PARTIAL_IMAGES = 1
 export const DEFAULT_AGENT_MAX_TOOL_ROUNDS = 15
+/** 接口允许的参考图数量上限 */
+export const MAX_INPUT_IMAGES = 16
 
 export type CustomProviderRequestMethod = 'GET' | 'POST'
 export type CustomProviderContentType = 'json' | 'multipart'
@@ -104,6 +106,15 @@ export interface PresetConfig {
   agent?: PresetAgentConfig
 }
 
+/** 参考图预览中“编辑图片”按钮的默认行为 */
+export type ReferenceImageEditAction = 'ask' | 'sketch' | 'mask'
+
+/** 打开画板的请求：baseImageSrc 为空时是空白画板，replaceImageId 表示完成后替换该参考图 */
+export interface SketchBoardRequest {
+  baseImageSrc: string | null
+  replaceImageId?: string
+}
+
 export interface AppSettings {
   /** 旧版单配置字段：保留用于导入/查询参数兼容，实际请求以 active profile 为准 */
   baseUrl: string
@@ -124,6 +135,7 @@ export interface AppSettings {
   allowPromptRewrite: boolean
   taskCompletionNotification: boolean
   enterSubmit: boolean
+  referenceImageEditAction: ReferenceImageEditAction
   zipDownloadRoutes: ZipDownloadRoute[]
   agentScrollToBottomAfterSubmit: boolean
   agentMaxToolRounds: number
@@ -165,6 +177,13 @@ export interface InputImage {
   id: string
   /** data URL，用于预览 */
   dataUrl: string
+}
+
+/** 参考图上的评论标注，x / y 为相对原图宽高的比例（0~1） */
+export interface ImageComment {
+  x: number
+  y: number
+  text: string
 }
 
 export interface MaskDraft {
