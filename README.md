@@ -11,7 +11,7 @@
 **基于 OpenAI gpt-image-2.5 API 的图片生成与编辑工具**
 
 提供简洁精美的 Web UI，支持 OpenAI / OpenAI 兼容接口、sub2api（异步）、fal.ai 与可导入的自定义 HTTP 供应商。<br>
-支持文本生图、参考图与遮罩编辑，数据纯本地化存储，带来流畅的历史记录与参数管理体验。
+支持文本生图、参考图、画板标注与遮罩编辑，数据纯本地化存储，带来流畅的历史记录与参数管理体验。
 
 <br>
 
@@ -44,21 +44,15 @@
 </tr>
 <tr>
 <td width="180" align="center" valign="middle">
-  <a href="https://api.muteki.site/register?aff=CookSleep&promo=CookSleep"><img src="https://github.com/user-attachments/assets/0247d44d-d76b-458b-b8f5-9714ec46e7de" alt="MaruCode" width="150"></a>
-</td>
-<td valign="middle"><b><a href="https://api.muteki.site/register?aff=CookSleep&promo=CookSleep">MaruCode</a></b>&nbsp;是一家偶尔做做慈善的小破站 API，自营号池，主要提供 Codex、Claude Code、GPT Image 等主流模型，支持 Websocket 协议，明码标价(Codex 0.25x, CC 1.5x)，透明汇率(1:1)，<a href="https://api.muteki.site/register?aff=CookSleep&promo=CookSleep">新用户注册送 2 刀</a>。<a href="https://images-2.muteki.site">生图工作台🖼️</a></td>
-</tr>
-<tr>
-<td width="180" align="center" valign="middle">
   <a href="https://go.apimart.ai/gh-gpt_image_playground"><img src="https://github.com/user-attachments/assets/d38e62e8-55be-4b3b-84cd-b7812c35a228" alt="APIMart" width="150"></a>
 </td>
 <td valign="middle"><b><a href="https://go.apimart.ai/gh-gpt_image_playground">APIMart</a></b>&nbsp;是专注 AI 图片/视频生成的低价 API 平台，GPT-Image-2 低至 $0.006/张，1 美元可出图 160+ 张。图片、视频一套异步 API 通吃，提交任务拿 ID、回调取结果，跑批万张不超时、换模型不改代码。按量付费、无月费，通过<a href="https://go.apimart.ai/gh-gpt_image_playground">此注册链接</a>注册即可开用。</td>
 </tr>
 <tr>
 <td width="180" align="center" valign="middle">
-  <a href="https://9527.codes"><img src="https://github.com/user-attachments/assets/29eba620-e902-42f9-9c3b-2fb2d7b2e310" alt="9527 CODE" width="150"></a>
+  <a href="https://api.muteki.site/register?aff=CookSleep&promo=CookSleep"><img src="https://github.com/user-attachments/assets/0247d44d-d76b-458b-b8f5-9714ec46e7de" alt="MaruCode" width="150"></a>
 </td>
-<td valign="middle"><b><a href="https://9527.codes">9527 CODE</a></b>&nbsp;是企业级满血 AI 中转服务平台，专注提供 Claude Code、Codex 等主流模型的高稳定中转能力，为企业级 AI 使用提供稳定、合规、高效的一站式解决方案。</td>
+<td valign="middle"><b><a href="https://api.muteki.site/register?aff=CookSleep&promo=CookSleep">MaruCode</a></b>&nbsp;是一家偶尔做做慈善的小破站 API，自营号池，主要提供 OpenAI、Anthropic、GPT Image 等主流模型，支持 Websocket 协议，明码标价(OAI 0.3x, A÷ 1.7x)，透明汇率(1:1)，<a href="https://api.muteki.site/register?aff=CookSleep&promo=CookSleep">新用户注册送 1 刀</a>。<a href="https://images-2.muteki.site">生图工作台🖼️</a></td>
 </tr>
 <tr>
 <td width="180" align="center" valign="middle">
@@ -124,7 +118,10 @@
 
 ### 🎨 强大的图像生成与编辑
 - **参考图与遮罩**：支持上传最多 16 张参考图（支持剪贴板和拖拽）。内置可视化遮罩编辑器，自动预处理以符合官方分辨率限制。
+- **画板标注**：可在空白画布或参考图上用画笔、文字、图形和像素橡皮擦标注修改意图，完成后作为参考图使用；画板与遮罩编辑器均支持缩放平移（Alt / Ctrl + 滚轮、Alt + 拖动、双指捏合）。
+- **评论标注**：在画板中用评论工具点击图片添加评论，评论以“@图N 评论”胶囊插入提示词，发送时自动附上每条评论在图中的位置（如 `(X=52%, Y=41%)`），复用任务时可恢复评论。
 - **批量与迭代**：支持单次多图生成；一键将满意结果转为参考图，无缝开启下一轮修改。
+- **多提示词批量提交**：在“设置 - 习惯配置”中开启后，可一次粘贴多条提示词批量生成。提示词之间空两行分隔（评论等单个空行仍属于同一条提示词），参考图和参数对每条提示词都生效；支持排队或并发执行，并发数默认限制为 10，进行中可查看进度并随时停止。
 - **流式生成预览**：`Images API` 与 `Responses API` 模式均支持流式接收中间步骤图像，缓解连接超时问题。
 - **透明背景（API 原生 / 本地后处理双模式）**：画廊模式下选择 PNG 或 WebP 格式后可开启透明背景功能，每个 API 配置可独立选择实现方式（设置入口在 API 配置页）。API 原生模式会直接请求模型返回透明通道（需当前接口和模型支持；fal.ai 暂无对应参数），本地后处理模式则会要求模型使用纯绿色或纯洋红色背景，并在结果返回后于浏览器中去除背景色，按所选 PNG 或 WebP 格式保存透明结果。
 
@@ -150,6 +147,7 @@
 
 ### 🔌 多配置与供应商增强
 - **多配置管理**：支持创建并保存多个 API 配置（包含供应商、API Key、模型等），按需快速切换；支持一键复制当前配置到列表底部，并通过拖拽对配置列表与供应商列表进行自定义排序。
+- **多模型切换**：配置的模型 ID 可用逗号分隔填写多个模型（如 `gpt-image-2.5-sunburst, gpt-image-2`），在首页参数栏的“模型”中切换，选择按配置分别记住；预置配置、URL 传参与导入导出均支持这种写法。
 - **多供应商接入**：内置 OpenAI 兼容接口（含 `Images API` 和 `Responses API`）、sub2api（异步）、fal.ai（支持队列），并支持通过 JSON 导入自定义 HTTP 供应商配置（兼容同步/异步任务）。
 - **Agent 模式独立 API 配置**：支持为 Agent 模式使用原生（Response API）或混合（Response API + Image API）的独立 API 配置，解决部分供应商/模型不支持 `image_generation` 工具的问题。
 - **API 代理**：OpenAI 兼容接口与 fal.ai 均可配置自定义代理。其中 OpenAI 兼容接口可开启同源 `/api-proxy/` 代理，交由 Docker 或本地开发环境转发至真实 API，绕开浏览器 CORS 限制。
@@ -429,7 +427,7 @@ npm run build
 |------|------|------|
 | `apiUrl` | API Base URL | `?apiUrl=https://api.example.com/v1` |
 | `apiKey` | API Key | `?apiKey=sk-xxxx` |
-| `model` | 模型 ID | `?model=gpt-image-2.5-sunburst` |
+| `model` | 模型 ID，多个模型以逗号分隔，可在首页切换 | `?model=gpt-image-2.5-sunburst,gpt-image-2` |
 | `imageGenerationModel` | Responses API 的图像生成工具模型，留空使用 API 默认值 | `?imageGenerationModel=gpt-image-2.5-sunburst` |
 | `apiMode` | `images` 或 `responses`，默认 `images` | `?apiMode=responses` |
 | `profileName` | 配置名称，默认“URL 参数配置” | `?profileName=我的配置` |
@@ -469,7 +467,7 @@ https://cooksleep.github.io/gpt_image_playground?apiUrl={address}&apiKey={key}&m
 | `provider` | 是 | 供应商类型。`"openai"` 为 OpenAI 兼容接口，`"sb2api-async"` 为 sub2api（异步），`"fal"` 为 fal.ai，其他值引用 `customProviders` 中具有相同 ID 的供应商定义。 |
 | `baseUrl` | 是 | API 基础地址（Base URL）。未以 `/` 结尾时遵循 OpenAI 规则自动补齐 `/v1` 前缀；以 `/` 结尾时直接基于该地址请求接口，不补 `/v1`；fal.ai 可留空。 |
 | `apiKey` | 否 | API Key。建议省略，让用户导入后自行填写。 |
-| `model` | 是 | 默认模型 ID。 |
+| `model` | 是 | 模型 ID。多个模型以逗号分隔，默认使用第一个，用户可在首页切换。 |
 | `imageGenerationModel` | 否 | Responses API 的 `image_generation` 工具模型，默认 `gpt-image-2.5-sunburst`；也可使用 `gpt-image-2.5-flare`。留空时不发送工具模型 ID，保持 API 默认值。 |
 | `apiMode` | 否 | `"images"` 或 `"responses"`，默认 `"images"`。 |
 | `isDefault` | 否 | 有多个配置时，为默认项设置 `true`（只能有一个）；只有一个配置时不填。默认项决定首次使用时自动选中的配置；允许拖动排序和删除（受保护策略控制）。 |
