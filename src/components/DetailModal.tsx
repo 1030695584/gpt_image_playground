@@ -53,6 +53,7 @@ export default function DetailModal() {
   const viewRawResponseTooltip = useTooltip()
   const downloadPartialImagesTooltip = useTooltip()
   const retryTooltip = useTooltip()
+  const retriedAtTooltip = useTooltip()
   const downloadImageTooltip = useTooltip()
   const downloadOriginalImageTooltip = useTooltip()
   const downloadAllTooltip = useTooltip()
@@ -1036,6 +1037,23 @@ export default function DetailModal() {
             {/* 时间 */}
             <div className="text-xs text-gray-400 dark:text-gray-500 mb-4">
               <span>创建于 {formatTime(task.createdAt)}</span>
+              {task.startedAt != null && task.startedAt > task.createdAt && (
+                <span className="relative ml-1 inline-flex align-middle">
+                  <button
+                    type="button"
+                    {...retriedAtTooltip.handlers}
+                    className="inline-flex text-gray-400 transition hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300"
+                    aria-label="查看重试时间"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </button>
+                  <ViewportTooltip visible={retriedAtTooltip.visible} className="whitespace-nowrap">
+                    重试于 {formatTime(task.startedAt)}
+                  </ViewportTooltip>
+                </span>
+              )}
               {formatDuration() && <span> · 耗时 {formatDuration()}</span>}
             </div>
           </div>

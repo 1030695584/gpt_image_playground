@@ -1148,12 +1148,12 @@ function scheduleOpenAIWatchdog(taskId: string, timeoutSeconds: number, profile?
   if (!task || !isRunningOpenAITask(task)) return
 
   const timeoutMs = Math.max(0, timeoutSeconds * 1000)
-  // ponytail: timeout starts when this request starts, not when a queued batch was submitted
+  const remainingMs = Math.max(0, timeoutMs - (Date.now() - (task.startedAt ?? task.createdAt)))
   const timer = setTimeout(() => {
     openAIWatchdogTimers.delete(taskId)
     const failed = failOpenAITaskIfStillRunning(taskId, createOpenAITimeoutError(timeoutSeconds, profile))
     if (failed) useStore.getState().showToast('OpenAI 任务请求超时', 'error')
-  }, timeoutMs)
+  }, remainingMs)
   openAIWatchdogTimers.set(taskId, timer)
 }
 
@@ -3765,7 +3765,7 @@ async function executeTask(taskId: string) {
       (revisedPrompt) => revisedPrompt?.trim() && revisedPrompt.trim() !== requestPrompt.trim(),
     )
     const hasRevisedPromptValue = shouldStoreRevisedPrompts && revisedPrompts?.some((revisedPrompt) => revisedPrompt?.trim())
-    if (taskProvider === 'openai' && activeProfile.apiMode === 'responses' && !activeProfile.codexCli) {
+    if (taskExecutions.get(taskId) === execution && taskProvider === 'openai' && activeProfile.apiMode === 'responses' && !activeProfile.codexCli) {
       if (promptWasRevised) {
         showCodexCliPrompt()
       } else if (!hasRevisedPromptValue) {
@@ -3975,36 +3975,38 @@ export async function deleteFavoriteCollection(collectionId: string, deleteTasks
   useStore.getState().showToast(`已删除收藏夹「${collection.name}」`, 'success')
 }
 
-/** 失败任务原位重试；成功任务仍可另开一次生成 */
+/** 按重试方式新建任务或覆盖原任务；Agent 对话中的任务始终新建 */
 export async function retryTask(task: TaskRecord) {
   const { settings, tasks } = useStore.getState()
-  const current = tasks.find((item) => item.id === task.id)
-  if (!current || current.status === 'running' || current.falRecoverable || current.customRecoverable) return
-  task = current
+  const source = tasks.find((item) => item.id === task.id)
+  if (!source || source.status === 'running' || source.falRecoverable || source.customRecoverable) return
   const activeProfile = getActiveApiProfile(settings)
-  const normalizedParams = normalizeParamsForSettings(task.params, settings, { hasInputImages: task.inputImageIds.length > 0 })
+  const normalizedParams = normalizeParamsForSettings(source.params, settings, { hasInputImages: source.inputImageIds.length > 0 })
   const shouldUseTransparentOutput = (normalizedParams.output_format === 'png' || normalizedParams.output_format === 'webp') && normalizedParams.transparent_output
   const taskParams = shouldUseTransparentOutput
     ? getTransparentRequestParams(normalizedParams)
     : { ...normalizedParams, transparent_output: false }
   const transparentMeta = taskParams.transparent_output && activeProfile.transparentBackgroundMethod === 'local'
-    ? createTransparentOutputMeta(task.prompt.trim())
+    ? createTransparentOutputMeta(source.prompt.trim())
     : null
-  const taskId = task.status === 'error' ? task.id : genId()
+  const overwrite = !isAgentTask(source) && (
+    settings.retryMode === 'overwriteAll' || (settings.retryMode === 'overwriteFailed' && source.status === 'error')
+  )
+  const taskId = overwrite ? source.id : genId()
   const startedAt = Date.now()
   const newTask: TaskRecord = {
-    ...(task.status === 'error' ? task : {}),
+    ...(overwrite ? source : {}),
     id: taskId,
-    prompt: task.prompt,
+    prompt: source.prompt,
     params: taskParams,
     apiProvider: activeProfile.provider,
     apiProfileId: activeProfile.id,
     apiProfileName: activeProfile.name,
     apiMode: activeProfile.apiMode,
     apiModel: activeProfile.model,
-    inputImageIds: [...task.inputImageIds],
-    maskTargetImageId: task.maskTargetImageId ?? null,
-    maskImageId: task.maskImageId ?? null,
+    inputImageIds: [...source.inputImageIds],
+    maskTargetImageId: source.maskTargetImageId ?? null,
+    maskImageId: source.maskImageId ?? null,
     transparentOutput: transparentMeta?.transparentOutput,
     transparentPrompt: transparentMeta?.effectivePrompt,
     outputImages: [],
@@ -4023,28 +4025,30 @@ export async function retryTask(task: TaskRecord) {
     customRecoverable: false,
     status: 'running',
     error: null,
-    createdAt: task.status === 'error' ? task.createdAt : startedAt,
+    createdAt: overwrite ? source.createdAt : startedAt,
     startedAt,
     finishedAt: null,
     elapsed: null,
   }
 
-  if (task.status === 'error') {
+  if (overwrite) {
     taskExecutions.delete(taskId)
+    // 覆盖后不再属于原批量，完成时应正常提示
+    batchTaskIds.delete(taskId)
     clearOpenAIWatchdogTimer(taskId)
     clearFalRecoveryTimer(taskId)
     clearCustomRecoveryTimer(taskId)
     useStore.getState().setTaskStreamPreview(taskId)
   }
-  useStore.getState().setTasks(task.status === 'error'
+  useStore.getState().setTasks(overwrite
     ? tasks.map((item) => item.id === taskId ? newTask : item)
     : [newTask, ...tasks])
   await putTask(newTask)
-  if (task.status === 'error') {
+  if (overwrite) {
     void deleteUnreferencedImageIds([
-      ...task.outputImages,
-      ...(task.transparentOriginalImages ?? []),
-      ...(task.streamPartialImageIds ?? []),
+      ...source.outputImages,
+      ...(source.transparentOriginalImages ?? []),
+      ...(source.streamPartialImageIds ?? []),
     ])
   }
 
@@ -4676,7 +4680,8 @@ export async function importData(input: File | File[], options: ImportOptions = 
       }
 
       for (const task of importedTasks) {
-        await putTask(task)
+        // startedAt 来自导入文件，非法值会让计时和“重试于”显示异常
+        await putTask(Number.isFinite(task.startedAt) || task.startedAt === undefined ? task : { ...task, startedAt: undefined })
       }
 
       const tasks = await getAllTasks()
