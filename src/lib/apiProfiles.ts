@@ -15,6 +15,7 @@ import type {
   CustomProviderSubmitMapping,
   CustomProviderTemplate,
   ReferenceImageEditAction,
+  RetryMode,
 } from '../types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, DEFAULT_ZIP_DOWNLOAD_ROUTES, ZIP_DOWNLOAD_ROUTE_VALUES } from '../types'
 import { customProviderSupportsNativeTransparentBackground } from './customProviderCapabilities'
@@ -130,6 +131,11 @@ export function getDefaultApiProfileId(settings: Partial<AppSettings> | unknown)
 
 function normalizeReferenceImageEditAction(value: unknown): ReferenceImageEditAction {
   return value === 'sketch' || value === 'mask' ? value : 'ask'
+}
+
+function normalizeRetryMode(value: unknown, alwaysShowRetryButton: boolean): RetryMode {
+  if (value === 'overwriteAll') return alwaysShowRetryButton ? value : 'overwriteFailed'
+  return value === 'overwriteFailed' ? value : 'new'
 }
 
 function normalizeZipDownloadRoutes(value: unknown) {
@@ -729,6 +735,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     persistInputOnRestart: typeof record.persistInputOnRestart === 'boolean' ? record.persistInputOnRestart : true,
     reuseTaskApiProfileTemporarily: typeof record.reuseTaskApiProfileTemporarily === 'boolean' ? record.reuseTaskApiProfileTemporarily : false,
     alwaysShowRetryButton: typeof record.alwaysShowRetryButton === 'boolean' ? record.alwaysShowRetryButton : false,
+    retryMode: normalizeRetryMode(record.retryMode, record.alwaysShowRetryButton === true),
     allowPromptRewrite: typeof record.allowPromptRewrite === 'boolean' ? record.allowPromptRewrite : false,
     taskCompletionNotification: typeof record.taskCompletionNotification === 'boolean' ? record.taskCompletionNotification : false,
     enterSubmit: typeof record.enterSubmit === 'boolean' ? record.enterSubmit : false,
@@ -1310,6 +1317,7 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   persistInputOnRestart: true,
   reuseTaskApiProfileTemporarily: false,
   alwaysShowRetryButton: false,
+  retryMode: 'new',
   allowPromptRewrite: false,
   taskCompletionNotification: false,
   enterSubmit: false,
