@@ -206,6 +206,16 @@ export const IMAGE_COMPLEXITIES = ['auto', 'low', 'medium', 'high'] as const
 export const GIF_FRAME_COUNT_RANGE = { min: 2, max: 16 }
 export const GIF_FRAME_DURATION_RANGE = { min: 20, max: 2000 }
 
+/** 参数面板中不可选的项及原因，undefined 表示可选 */
+export interface ParamDisabledReasons {
+  complexity?: string
+  gif?: string
+  svg?: string
+  autoQuality?: string
+  extendedQuality?: string
+  autoSize?: string
+}
+
 export interface TaskParams {
   size: string
   quality: 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
@@ -216,9 +226,9 @@ export interface TaskParams {
   moderation: 'auto' | 'low'
   n: number
   transparent_output: boolean
-  /** 仅 GIF 输出；null 表示使用接口默认值 */
-  frame_count: number | null
-  frame_duration_ms: number | null
+  /** 仅 GIF 输出 */
+  frame_count: number
+  frame_duration_ms: number
 }
 
 export const DEFAULT_PARAMS: TaskParams = {
@@ -230,8 +240,8 @@ export const DEFAULT_PARAMS: TaskParams = {
   moderation: 'auto',
   n: 1,
   transparent_output: false,
-  frame_count: null,
-  frame_duration_ms: null,
+  frame_count: 9,
+  frame_duration_ms: 200,
 }
 
 // ===== 输入图片（UI 层面） =====
@@ -577,4 +587,18 @@ export interface ExportData {
     height?: number
     thumbnailVersion?: number
   }>
+}
+
+// ===== Skill（仅客户端） =====
+
+/** 对应 Rust `src-tauri/src/cli/skill.rs` 的 `SkillTarget`：`~/.claude/skills` 或 `~/.agents/skills` */
+export type SkillTarget = 'claude' | 'agents'
+/** 对应 Rust `State`：找不到用户文件夹、未安装、已安装、已安装但与当前版本不同、同名文件夹不是本应用的 Skill */
+export type SkillState = 'notFound' | 'absent' | 'added' | 'outdated' | 'invalid'
+
+export interface SkillInfo {
+  /** 随安装包附带的 Skill 文件夹 */
+  skillDir: string
+  /** `path` 为安装后的 Skill 文件夹 */
+  skills: { id: SkillTarget; path: string; state: SkillState }[]
 }

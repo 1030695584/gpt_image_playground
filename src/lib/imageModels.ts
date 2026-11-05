@@ -1,6 +1,6 @@
 import type { ApiProfile } from '../types'
 
-export const DEFAULT_IMAGES_MODEL = 'gpt-image-2.5-sunburst'
+export const DEFAULT_IMAGES_MODEL = 'gpt-image-2.6-sunburst'
 /** Images API 生成 SVG 时必填的 svg.model（负责编写 SVG 的文本模型） */
 export const DEFAULT_SVG_MODEL = 'gpt-6.1-sol'
 
@@ -39,10 +39,9 @@ export function supportsExtendedQuality(profile: ApiProfile) {
   return isGptImage25PlusModel(model)
 }
 
-/** complexity、SVG 和 GIF：OpenAI 的 Images API、Responses 图像工具、fal.ai 的 2.6 端点和自定义服务商（由模板决定发送哪些）都支持 */
+/** complexity、SVG 和 GIF：OpenAI 的 Images API、Responses 图像工具（含 Codex CLI）、fal.ai 的 2.6 端点和自定义服务商（由模板决定发送哪些）都支持 */
 export function supportsGptImage26Params(profile: ApiProfile) {
-  if (!isGptImage26PlusModel(getImageGenerationModel(profile))) return false
-  return profile.provider === 'fal' || !profile.codexCli
+  return isGptImage26PlusModel(getImageGenerationModel(profile))
 }
 
 /** markup：OpenAI 只有 Images API 的编辑接口支持，Responses 图像工具不接受；fal.ai 从 2.6 端点开始提供 */
