@@ -47,7 +47,7 @@ interface CliReply {
 // API 配置、自定义服务商和启用的配置由各自的参数或工具修改
 const SETTING_KEYS = [
   'providerOrder', 'clearInputAfterSubmit', 'persistInputOnRestart', 'reuseTaskApiProfileTemporarily', 'alwaysShowRetryButton',
-  'saveTasksToActiveFavoriteCollection', 'retryMode', 'allowPromptRewrite', 'taskCompletionNotification', 'autoCheckUpdate', 'writeLogFile', 'enterSubmit',
+  'saveTasksToActiveFavoriteCollection', 'retryMode', 'allowPromptRewrite', 'imagePromptHints', 'taskCompletionNotification', 'autoCheckUpdate', 'writeLogFile', 'enterSubmit',
   'privacyModeShortcut', 'colorMode', 'uiFont', 'uiFontName', 'monoFont', 'monoFontName', 'showBatchPrompt', 'batchPromptEnabled',
   'batchPromptMode', 'batchPromptConcurrencyLimited', 'batchPromptConcurrency', 'referenceImageEditAction', 'zipDownloadRoutes',
   'saveLocationMode', 'agentScrollToBottomAfterSubmit', 'agentMaxToolRounds', 'agentWebSearch', 'agentMathFormattingPrompt',
@@ -333,7 +333,7 @@ function saveApiProfile(args: Record<string, unknown>) {
   const base = existing ?? createDefaultOpenAIProfile({ id: newId('openai'), name: '新配置' })
   const provider = typeof fields.provider === 'string' ? fields.provider : base.provider
   const customProvider = getCustomProviderDefinition(settings, provider)
-  if (!['openai', 'sb2api-async', 'fal'].includes(provider) && !customProvider) throw new Error(`没有这个服务商：${provider}`)
+  if (!['openai', 'google', 'xai', 'sb2api-async', 'fal'].includes(provider) && !customProvider) throw new Error(`没有这个服务商：${provider}`)
   const switched = provider === base.provider ? base : switchApiProfileProvider(base, provider, customProvider ?? undefined)
   const profile = { ...switched, ...fields, provider } as ApiProfile
   if (fields.selectedModel !== undefined && !splitModelList(profile.model).includes(String(fields.selectedModel))) {
