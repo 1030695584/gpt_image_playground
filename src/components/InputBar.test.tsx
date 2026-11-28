@@ -88,6 +88,36 @@ describe('参考图超限提示', () => {
     expect(useStore.getState().lightboxImageId).toBeNull()
   })
 
+  it('编辑历史消息时，图片引用菜单只列出该消息之前的分支图片', () => {
+    const rounds = [1, 2, 3].map((index) => ({
+      id: `round-${index}`, index, parentRoundId: index === 1 ? null : `round-${index - 1}`,
+      userMessageId: `user-${index}`, prompt: '', inputImageIds: [], outputTaskIds: [`task-${index}`],
+      status: 'done' as const, error: null, createdAt: index, finishedAt: index,
+    }))
+    const tasks = rounds.map((round, index) => ({
+      id: round.outputTaskIds[0], prompt: '', params: DEFAULT_PARAMS, inputImageIds: [], maskTargetImageId: null,
+      maskImageId: null, outputImages: [images[index].id], status: 'done' as const, error: null, createdAt: 1, finishedAt: 1, elapsed: 0,
+    }))
+    for (const image of images) cacheImage(image.id, image.dataUrl)
+    act(() => useStore.setState({
+      appMode: 'agent', activeAgentConversationId: 'c', agentEditingRoundId: null, tasks, inputImages: [],
+      agentConversations: [{ id: 'c', title: '会话', createdAt: 1, updatedAt: 3, rounds, messages: [], activeRoundId: 'round-3' }],
+    }))
+    const editor = container.querySelector<HTMLElement>('[contenteditable]')!
+    act(() => {
+      editor.textContent = '@'
+      window.getSelection()!.collapse(editor.firstChild!, 1)
+      editor.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(container.textContent).toContain('@第3轮图1')
+    act(() => useStore.setState({ agentEditingRoundId: 'round-2' }))
+    expect(container.textContent).toContain('@第1轮图1')
+    expect(container.textContent).not.toContain('@第2轮图1')
+    expect(container.textContent).not.toContain('@第3轮图1')
+    act(() => useStore.setState({ agentEditingRoundId: 'round-1' }))
+    expect(container.textContent).not.toContain('选择图片引用')
+  })
+
   it('达到上限后仍能打开添加菜单', () => {
     const add = container.querySelector<HTMLButtonElement>('button[aria-label="添加图片"]')!
     act(() => add.click())
@@ -119,6 +149,19 @@ describe('参考图超限提示', () => {
     expect(useStore.getState().maskEditorImageId).toBeNull()
     expect(useStore.getState().settings.referenceImageEditAction).toBe(referenceImageEditAction)
     expect(useStore.getState().sketchBoard).toMatchObject({ replaceImageId: images[0].id })
+  })
+
+  it('读取草稿参考图期间仍可编辑，图片就绪后可以发送', () => {
+    act(() => {
+      useStore.getState().setSettings({ profiles: [{ ...profile, apiKey: 'test-key' }] })
+      useStore.setState({ prompt: '参考这张图', inputImages: [{ ...images[0], dataUrl: '' }] })
+    })
+    const buttons = container.querySelectorAll<HTMLButtonElement>('button[aria-label="生成图像"]')
+    expect(buttons.length).toBeGreaterThan(0)
+    for (const button of buttons) expect(button.disabled).toBe(true)
+    expect(container.querySelector('[contenteditable="true"]')).not.toBeNull()
+    act(() => useStore.getState().setInputImages([images[0]]))
+    for (const button of buttons) expect(button.disabled).toBe(false)
   })
 
   it('已有遮罩不支持时置灰并提示，切回支持的模型后恢复', () => {

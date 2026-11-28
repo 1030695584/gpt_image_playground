@@ -180,6 +180,26 @@ describe('persisted state codec', () => {
     expect(result.state.agentConversations[0].rounds[0]).toMatchObject({ status: 'error', error: '上次请求已中断' })
     expect(result.state.agentInputDrafts['conversation-a']).toMatchObject({ prompt: '旧版 Agent 草稿', inputImages: [imageA] })
     expect(result.state.prompt).toBe('旧版 Agent 草稿')
+    expect(result.state.galleryInputDraft).toBeNull()
+  })
+
+  it('restores the shared input from a legacy Agent session before its first send', () => {
+    const restored = normalizePersistedState({
+      appMode: 'agent', agentConversations: [], prompt: '第一条消息', inputImages: [imageA],
+    }, fallback())!.state
+    expect(restored).toMatchObject({ activeAgentConversationId: null, prompt: '第一条消息', inputImages: [imageA], galleryInputDraft: null })
+  })
+
+  it('keeps the gallery draft out of an empty Agent composer on reload', () => {
+    const state = { ...source(), appMode: 'agent' as const, prompt: '', inputImages: [],
+      galleryInputDraft: { prompt: '画廊输入', inputImages: [imageA], maskDraft: null, maskEditorImageId: null },
+    }
+    const stored = createPersistedState(state)
+    expect(stored.prompt).toBe('画廊输入')
+    for (const activeAgentConversationId of [state.activeAgentConversationId, null]) {
+      const restored = normalizePersistedState({ ...stored, activeAgentConversationId }, { ...fallback(), agentConversations: [] })!.state
+      expect(restored).toMatchObject({ prompt: '', inputImages: [], agentInputDrafts: {}, galleryInputDraft: { prompt: '画廊输入' } })
+    }
   })
 
   it('persists gallery and Agent drafts only when input persistence is enabled', () => {

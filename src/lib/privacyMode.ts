@@ -12,6 +12,7 @@ export interface PrivacyInputSnapshot {
   galleryInputDraft: AgentInputDraft | null
   agentInputDrafts: Record<string, AgentInputDraft>
   activeAgentConversationId: string | null
+  agentEditingRoundId?: string | null
   reusedTaskApiProfileId: string | null
   reusedTaskApiProfileName: string | null
   reusedTaskApiProfileMissing: boolean
@@ -46,6 +47,7 @@ export function createPrivacyModeState(state: PrivacySourceState, now: number): 
       galleryInputDraft: state.galleryInputDraft,
       agentInputDrafts: state.agentInputDrafts,
       activeAgentConversationId: state.activeAgentConversationId,
+      agentEditingRoundId: state.agentEditingRoundId ?? null,
       reusedTaskApiProfileId: state.reusedTaskApiProfileId,
       reusedTaskApiProfileName: state.reusedTaskApiProfileName,
       reusedTaskApiProfileMissing: state.reusedTaskApiProfileMissing,
@@ -80,6 +82,7 @@ export function restorePrivacyInputState(snapshot: PrivacyInputSnapshot, current
   return {
     galleryInputDraft,
     agentInputDrafts,
+    agentEditingRoundId: null,
     ...(current.appMode === 'gallery'
       ? restoreGalleryInputDraftState(galleryInputDraft)
       : restoreAgentInputDraftState(agentInputDrafts, current.activeAgentConversationId)),

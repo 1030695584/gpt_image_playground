@@ -6,8 +6,10 @@ import type { AgentConversation, ExportData, StoredImage, StoredImageThumbnail, 
 import { getSelectedImageMentionLabel } from './lib/promptImageMentions'
 import { hasActiveDataOperations, hasInterruptibleOperations, trackDataTransfer } from './lib/dataOperations'
 import { cancelDataProgress, useDataProgress } from './lib/dataProgress'
-import { deleteAgentRoundFromConversation, getActiveAgentRounds, getAgentConversationTaskIds, getAgentRoundTaskIds, remapAgentRoundMentionsForPathChange } from './lib/agentConversationState'
-import { cleanStaleAgentInputDrafts } from './lib/inputDraftState'
+import { deleteAgentRoundFromConversation, getActiveAgentRounds, getAgentConversationTaskIds, getAgentRoundTaskIds, normalizeAgentConversations, remapAgentRoundMentionsForPathChange } from './lib/agentConversationState'
+import { buildAgentApiInput } from './lib/agentInputBuilder'
+import { collectAgentRoundOutputImageSlots } from './lib/agentImageReferences'
+import { agentDraftKey, cleanStaleAgentInputDrafts } from './lib/inputDraftState'
 import { ALL_FAVORITES_COLLECTION_ID } from './lib/favoriteState'
 import { normalizePersistedState } from './lib/persistedState'
 import { getTaskOutputSlots } from './lib/taskState'
@@ -80,14 +82,14 @@ vi.mock('./lib/db', () => {
       images.set(id, { id, dataUrl, source, createdAt: Date.now() })
       return id
     },
-    storeImageWithSize: async (dataUrl: string, source: StoredImage['source'] = 'upload') => {
+    storeImageWithSize: vi.fn(async (dataUrl: string, source: StoredImage['source'] = 'upload') => {
       const id = `stored-image-${++imageSeq}`
       const size = dataUrl.match(/(\d+)x(\d+)/)
       const width = size ? Number(size[1]) : undefined
       const height = size ? Number(size[2]) : undefined
       images.set(id, { id, dataUrl, source, createdAt: Date.now(), width, height })
       return { id, width, height }
-    },
+    }),
   }
 })
 vi.mock('./lib/api', () => ({
@@ -140,12 +142,12 @@ vi.mock('./lib/browserNotification', async (importOriginal) => ({
   showBrowserNotification: vi.fn(() => true),
 }))
 import { showBrowserNotification } from './lib/browserNotification'
-import { clearAgentConversations, clearImages, clearTasks, commitTaskDeletion, deleteImage as deleteDbImage, deleteTask as deleteDbTask, getAllAgentConversations, getAllImageIds, getAllTasks, getImage, getStoredImageThumbnail, putAgentConversation, putImage, putImageThumbnail, putTask as putDbTask } from './lib/db'
+import { clearAgentConversations, clearImages, clearTasks, commitTaskDeletion, deleteImage as deleteDbImage, deleteTask as deleteDbTask, getAllAgentConversations, getAllImageIds, getAllTasks, getImage, getStoredImageThumbnail, putAgentConversation, putImage, putImageThumbnail, putTask as putDbTask, storeImageWithSize } from './lib/db'
 import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { clearData, clearFailedTasks, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, removeTaskOutput, restoreExplicitPresetConfig, retryTask, reuseConfig, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
+import { clearData, clearFailedTasks, deleteFavoriteCollection, editAgentRoundMessage, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, retryAgentMessage, removeMultipleTasks, removeTask, removeTaskOutput, restoreExplicitPresetConfig, retryTask, reuseConfig, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
 
 const commitTaskDeletionImplementation = vi.mocked(commitTaskDeletion).getMockImplementation()!
 const deleteDbImageImplementation = vi.mocked(deleteDbImage).getMockImplementation()!
@@ -1359,6 +1361,43 @@ describe('agent conversation persistence', () => {
     expect(stored.map((conversation) => conversation.id)).toEqual(['legacy-conversation', 'early-conversation'])
   })
 
+  it('preserves a new conversation while interrupted tasks are being written back', async () => {
+    const existing = agentConversation({
+      id: 'existing', activeRoundId: 'round',
+      rounds: [{
+        id: 'round', index: 1, userMessageId: 'message', prompt: '原消息',
+        inputImageIds: [], outputTaskIds: [], status: 'done', createdAt: 1, finishedAt: 2, error: null,
+      }],
+      messages: [{ id: 'message', role: 'user', content: '原消息', roundId: 'round', createdAt: 1 }],
+    })
+    useStore.setState({ agentConversations: [], activeAgentConversationId: null })
+    await clearTasks()
+    await putAgentConversation(existing)
+    await putDbTask(task({ status: 'running' }))
+    const started = deferred<void>()
+    const release = deferred<void>()
+    const put = putDbTask
+    const saving = vi.spyOn(await import('./lib/db'), 'putTask').mockImplementationOnce(async (item) => {
+      started.resolve()
+      await release.promise
+      return put(item)
+    })
+
+    try {
+      const loading = initStore()
+      await started.promise
+      const added = useStore.getState().createAgentConversation()
+      release.resolve()
+      await loading
+      expect(added).not.toBe(existing.id)
+      expect(useStore.getState().activeAgentConversationId).toBe(added)
+      expect((await getAllAgentConversations()).map((item) => item.id)).toContain(added)
+    } finally {
+      release.resolve()
+      saving.mockRestore()
+    }
+  })
+
   it('restores active conversation and draft when localStorage no longer stores conversations', async () => {
     const storedConversation = agentConversation({ id: 'stored-conversation', createdAt: 1, updatedAt: 1 })
     useStore.setState({
@@ -1388,6 +1427,47 @@ describe('agent conversation persistence', () => {
     expect(state.activeAgentConversationId).toBe('stored-conversation')
     expect(state.agentInputDrafts['stored-conversation']?.prompt).toBe('未发送草稿')
     expect(state.prompt).toBe('未发送草稿')
+  })
+
+  it.each([false, true])('hydrates the owning draft when typing during startup (privacy %s)', async (privacy) => {
+    await clearImages()
+    await clearAgentConversations()
+    await clearTasks()
+    const conversation = agentConversation({ id: 'loading-draft' })
+    await putAgentConversation(conversation)
+    const draft = {
+      prompt: '公开草稿', inputImages: [{ id: imageB.id, dataUrl: '' }],
+      maskDraft: null, maskEditorImageId: null, updatedAt: Date.now(),
+    }
+    useStore.setState({
+      appMode: 'agent', privacyMode: null, agentConversations: [conversation], activeAgentConversationId: conversation.id,
+      agentInputDrafts: privacy ? {} : { [conversation.id]: draft }, galleryInputDraft: privacy ? draft : null,
+      agentEditingRoundId: null, prompt: '', inputImages: [], maskDraft: null, maskEditorImageId: null,
+    })
+    const started = deferred<void>()
+    const release = deferred<void>()
+    vi.mocked(getImage).mockImplementationOnce(async () => {
+      started.resolve()
+      await release.promise
+      return imageB
+    })
+    const loading = initStore()
+    await started.promise
+    if (privacy) useStore.getState().togglePrivacyMode()
+    useStore.getState().setPrompt('刚输入的文字')
+    release.resolve()
+    await loading
+
+    const state = useStore.getState()
+    expect(state.prompt).toBe('刚输入的文字')
+    expect(state.inputImages).toEqual(privacy ? [] : [imageB])
+    if (privacy) {
+      expect(state.privacyMode?.inputSnapshot.galleryInputDraft).toMatchObject({ prompt: draft.prompt, inputImages: [imageB] })
+      state.togglePrivacyMode()
+      expect(useStore.getState()).toMatchObject({ prompt: draft.prompt, inputImages: [imageB] })
+    } else {
+      expect(state.agentInputDrafts[conversation.id]).toMatchObject({ prompt: state.prompt, inputImages: [imageB] })
+    }
   })
 
   it('clears masks and renumbers mentions when startup cannot restore a draft image', async () => {
@@ -1832,12 +1912,14 @@ describe('fal task recovery', () => {
         { id: 'assistant-a', role: 'assistant', content: '', roundId: 'round-a', outputTaskIds: [agentTask.id], createdAt: 2 },
       ],
     })
-    vi.mocked(getFalQueuedImageResult).mockResolvedValue({
+    const polling = deferred<Awaited<ReturnType<typeof getFalQueuedImageResult>>>()
+    vi.mocked(getFalQueuedImageResult).mockImplementationOnce(() => polling.promise)
+    const recoveredImages = {
       images: ['data:image/png;base64,agent-recovered'],
       actualParams: {},
       actualParamsList: [{}],
       revisedPrompts: [],
-    })
+    }
     const continuation = deferred<Awaited<ReturnType<typeof callAgentResponsesApi>>>()
     vi.mocked(callAgentResponsesApi).mockImplementationOnce(() => continuation.promise)
     useStore.setState({
@@ -1858,6 +1940,12 @@ describe('fal task recovery', () => {
     await putAgentConversation(conversation)
 
     await initStore()
+    await vi.waitFor(() => expect(getFalQueuedImageResult).toHaveBeenCalled())
+    await retryAgentMessage(conversation.id, 'round-a', 'assistant')
+    expect(useStore.getState().agentConversations[0].rounds).toHaveLength(1)
+    expect(useStore.getState().agentConversations[0].rounds[0].status).toBe('running')
+    expect(callAgentResponsesApi).not.toHaveBeenCalled()
+    polling.resolve(recoveredImages)
     await vi.waitFor(() => expect(callAgentResponsesApi).toHaveBeenCalledTimes(1))
     expect(useStore.getState().agentConversations[0].rounds[0]).toMatchObject({ status: 'running', error: null })
     expect(await useStore.getState().deleteAgentRound(conversation.id, 'round-a')).toBe('running')
@@ -1880,6 +1968,41 @@ describe('fal task recovery', () => {
     expect(round.responseOutput).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'function_call_output', call_id: 'tool-a' }),
     ]))
+  })
+
+  it('serializes restored reply branches and releases rounds with incomplete recovery data', async () => {
+    const text = createDefaultOpenAIProfile({ apiKey: 'text-key', apiMode: 'responses' })
+    const fal = createDefaultFalProfile({ id: 'fal-profile', apiKey: 'fal-key' })
+    const ids = ['first', 'second', 'broken']
+    const conversation = agentConversation({
+      activeRoundId: 'first',
+      rounds: ids.map((id) => ({
+        id, index: 1, userBranchId: 'group', userMessageId: `user-${id}`, parentRoundId: null,
+        prompt: '画图', inputImageIds: [], outputTaskIds: [`task-${id}`],
+        responseOutput: [{ type: 'function_call', name: 'generate_image', call_id: id === 'broken' ? 'missing' : id, arguments: '{}' }],
+        status: 'running', error: null, createdAt: 1, finishedAt: null,
+      })),
+      messages: ids.map((id) => ({ id: `user-${id}`, role: 'user', content: '画图', roundId: id, createdAt: 1 })),
+    })
+    useStore.setState({ settings: normalizeSettings({
+      ...DEFAULT_SETTINGS, profiles: [text, fal], activeProfileId: text.id,
+      agentApiConfigMode: 'hybrid', agentTextProfileId: text.id, agentImageProfileId: fal.id,
+    }) })
+    await putAgentConversation(conversation)
+    for (const id of ids) {
+      await putDbTask(task({ id: `task-${id}`, apiProvider: 'fal', apiProfileId: fal.id, status: 'error',
+        falRequestId: id, falEndpoint: 'fal', falRecoverable: true, sourceMode: 'agent',
+        agentConversationId: conversation.id, agentRoundId: id, agentToolCallId: id }))
+    }
+    vi.mocked(getFalQueuedImageResult).mockResolvedValue({ images: [imageA.dataUrl], actualParams: {}, actualParamsList: [{}], revisedPrompts: [] })
+    const firstReply = deferred<Awaited<ReturnType<typeof callAgentResponsesApi>>>()
+    vi.mocked(callAgentResponsesApi).mockImplementationOnce(() => firstReply.promise)
+    await initStore()
+    await vi.waitFor(() => expect(useStore.getState().tasks.every((task) => task.status === 'done')).toBe(true))
+    expect(callAgentResponsesApi).toHaveBeenCalledTimes(1)
+    firstReply.resolve({ text: '完成', images: [], outputItems: [], responseId: 'first' })
+    await vi.waitFor(() => expect(useStore.getState().agentConversations[0].rounds.map((round) => round.status)).toEqual(['done', 'done', 'error']))
+    expect(callAgentResponsesApi).toHaveBeenCalledTimes(2)
   })
 
   it('records recovered Agent tool failures without continuing the Agent round', async () => {
@@ -2120,7 +2243,7 @@ describe('fal task recovery', () => {
     expect(useStore.getState().agentConversations[0].rounds[0]).toMatchObject({ status: 'error', error: '已停止生成。' })
   })
 
-  it('does not overwrite a stopped Agent task when an in-flight fal recovery completes', async () => {
+  it.each(['success', 'error', 'deleted'])('does not overwrite a stopped Agent task after a late fal %s', async (result) => {
     const agentTask = task({
       id: 'agent-fal-task',
       prompt: '画一只猫',
@@ -2155,6 +2278,7 @@ describe('fal task recovery', () => {
         prompt: '画一只猫',
         inputImageIds: [],
         outputTaskIds: [agentTask.id],
+        responseOutput: [{ type: 'function_call', name: 'generate_image', call_id: 'tool-a', arguments: '{}' }],
         status: 'running',
         error: null,
         createdAt: 1,
@@ -2176,19 +2300,17 @@ describe('fal task recovery', () => {
 
     await initStore()
     await vi.waitFor(() => expect(getFalQueuedImageResult).toHaveBeenCalledTimes(1))
-    useStore.setState((state) => ({
-      agentConversations: state.agentConversations.map((item) => item.id === 'conversation-a'
-        ? { ...item, rounds: item.rounds.map((round) => round.id === 'round-a' ? { ...round, status: 'running', error: null } : round) }
-        : item),
-    }))
-    stopAgentResponse('conversation-a')
-    recovery.resolve({
+    expect(useStore.getState().agentConversations[0].rounds[0].status).toBe('running')
+    if (result === 'deleted') await useStore.getState().deleteAgentConversation('conversation-a')
+    else stopAgentResponse('conversation-a')
+    if (result === 'error') recovery.reject(new Error('fal returned an error'))
+    else recovery.resolve({
       images: ['data:image/png;base64,should-not-write'],
       actualParams: {},
       actualParamsList: [{}],
       revisedPrompts: [],
     })
-    await recovery.promise
+    await recovery.promise.catch(() => {})
     await vi.waitFor(() => {
       expect(useStore.getState().tasks[0]).toMatchObject({ status: 'error', error: '已停止生成。', falRecoverable: false })
     })
@@ -2267,6 +2389,17 @@ describe('agent conversation creation', () => {
     })
   })
 
+  it('attaches the restored legacy Agent draft to the first conversation', () => {
+    const restored = normalizePersistedState({
+      appMode: 'agent', agentConversations: [], prompt: '第一条消息', inputImages: [imageA],
+    }, useStore.getState())!.state
+    useStore.setState(restored)
+    const id = useStore.getState().createAgentConversation()
+    const state = useStore.getState()
+    expect(state).toMatchObject({ activeAgentConversationId: id, prompt: '第一条消息', inputImages: [imageA], galleryInputDraft: null })
+    expect(state.agentInputDrafts[id]).toMatchObject({ prompt: '第一条消息', inputImages: [imageA] })
+  })
+
   it('refreshes the latest empty conversation instead of creating another one', () => {
     const olderEmpty = agentConversation({ id: 'older-empty', createdAt: 1_000, updatedAt: 1_000 })
     const latestEmpty = agentConversation({ id: 'latest-empty', createdAt: 2_000, updatedAt: 2_000 })
@@ -2332,6 +2465,144 @@ describe('agent conversation creation', () => {
 })
 
 describe('agent round deletion', () => {
+  function setupReplies() {
+    const rounds: AgentConversation['rounds'] = ['first', 'variant', 'followup', 'other'].map((id) => ({
+      id, index: id === 'followup' ? 2 : 1, parentRoundId: id === 'followup' ? 'first' : null,
+      userMessageId: `user-${id}`, assistantMessageId: `reply-${id}`,
+      ...(id === 'variant' ? { userBranchId: 'user-first' } : {}),
+      prompt: id, inputImageIds: [], outputTaskIds: [`task-${id}`],
+      responseId: `response-${id}`, responseOutput: [{ type: 'message', content: [{ type: 'output_text', text: id }] }],
+      status: 'done', error: null, createdAt: 1, finishedAt: 2,
+    }))
+    const conversation = agentConversation({
+      activeRoundId: 'variant',
+      visitedRoundIds: ['followup', 'first', 'variant'],
+      rounds,
+      messages: rounds.flatMap((round) => [
+        { id: round.userMessageId, roundId: round.id, role: 'user' as const, content: round.prompt, createdAt: 1 },
+        { id: round.assistantMessageId!, roundId: round.id, role: 'assistant' as const, content: round.id, createdAt: 2 },
+      ]),
+    })
+    useStore.setState({
+      agentConversations: [conversation],
+      tasks: rounds.map((round) => task({ id: round.outputTaskIds[0], agentRoundId: round.id })),
+    })
+    return conversation
+  }
+
+  it('deletes every reply to the selected input and preserves followups and other inputs', async () => {
+    const conversation = setupReplies()
+    expect(await useStore.getState().deleteAgentRound(conversation.id, 'variant')).toBe('deleted')
+    const updated = useStore.getState().agentConversations[0]
+    expect(updated.rounds.map((round) => round.id)).toEqual(['followup', 'other'])
+    expect(updated.rounds[0]).toMatchObject({ parentRoundId: null, index: 1 })
+    expect(updated.messages.map((message) => message.roundId)).toEqual(['followup', 'followup', 'other', 'other'])
+    expect(updated.visitedRoundIds).toEqual(['followup'])
+    expect(useStore.getState().tasks.map((task) => task.id)).toEqual(['task-followup', 'task-other'])
+  })
+
+  it('removes only the selected reply leaf and switches to the surviving reply path', async () => {
+    const conversation = setupReplies()
+    useStore.setState({ appMode: 'agent', activeAgentConversationId: conversation.id, agentEditingRoundId: null, agentInputDrafts: {} })
+    useStore.getState().setPrompt('只发给当前分支')
+    useStore.getState().setInputImages([imageA])
+    expect(await useStore.getState().deleteAgentAssistantMessage(conversation.id, 'reply-variant')).toBe('deleted')
+    const updated = useStore.getState().agentConversations[0]
+    expect(updated.rounds.map((round) => round.id)).toEqual(['first', 'followup', 'other'])
+    expect(useStore.getState()).toMatchObject({ prompt: '', inputImages: [] })
+    expect(updated.activeRoundId).toBe('followup')
+    expect(updated.visitedRoundIds).not.toContain('variant')
+    expect(useStore.getState().tasks.map((task) => task.id)).toEqual(['task-first', 'task-followup', 'task-other'])
+  })
+
+  it.each(['user', 'assistant'] as const)('isolates %s deletion when imported conversations reuse round and message IDs', async (role) => {
+    const a = setupReplies()
+    const variant = a.rounds[1]
+    variant.outputTaskIds.push('shared-legacy')
+    const b = agentConversation({
+      id: 'conversation-b', activeRoundId: variant.id,
+      rounds: [{ ...variant, outputTaskIds: ['task-b', 'legacy-b', 'shared-legacy'] }],
+      messages: a.messages.filter((message) => message.roundId === variant.id)
+        .map((message) => ({ ...message, outputTaskIds: ['task-b', 'legacy-b', 'shared-legacy'] })),
+    })
+    const tasks = [
+      ...useStore.getState().tasks,
+      task({ id: 'task-b', agentConversationId: b.id, agentRoundId: variant.id, agentMessageId: variant.assistantMessageId }),
+      task({ id: 'shared-legacy' }),
+      task({ id: 'legacy-b', agentRoundId: variant.id, agentMessageId: variant.assistantMessageId }),
+    ]
+    await clearTasks()
+    await clearAgentConversations()
+    useStore.setState({ tasks: [], agentConversations: [], activeAgentConversationId: null })
+    expect(await importData(importFile({
+      version: 3, exportedAt: new Date(0).toISOString(), tasks, agentConversations: [a, b], imageFiles: {},
+    }), { importConfig: false, importTasks: true })).toBe(true)
+    const key = agentDraftKey(b.id, 'edit', variant.id)
+    const draft = { prompt: 'B 编辑中的内容', inputImages: [], maskDraft: null, maskEditorImageId: null }
+    useStore.setState({
+      appMode: 'agent', activeAgentConversationId: b.id, agentEditingRoundId: variant.id,
+      agentInputDrafts: { [key]: draft }, prompt: draft.prompt,
+    })
+    const savedB = useStore.getState().agentConversations.find((item) => item.id === b.id)!
+    expect(getAgentConversationTaskIds(a, tasks)).not.toContain('task-b')
+    expect(getAgentConversationTaskIds(a, tasks)).not.toContain('legacy-b')
+    expect(getAgentConversationTaskIds(a, tasks, [a, b])).not.toContain('shared-legacy')
+    const result = role === 'user'
+      ? await useStore.getState().deleteAgentRound(a.id, variant.id)
+      : await useStore.getState().deleteAgentAssistantMessage(a.id, variant.assistantMessageId!)
+    expect(result).toBe('deleted')
+    const remaining = (await getAllTasks()).map((item) => item.id)
+    expect(remaining).toEqual(expect.arrayContaining(['task-b', 'legacy-b', 'shared-legacy']))
+    expect(remaining).not.toContain('task-variant')
+    expect((await getAllAgentConversations()).find((item) => item.id === b.id)).toEqual(savedB)
+    expect(useStore.getState()).toMatchObject({
+      agentEditingRoundId: variant.id, agentInputDrafts: { [key]: draft }, prompt: draft.prompt,
+    })
+  })
+
+  it('keeps separate replay prompts for imported conversations that share a legacy task', async () => {
+    const conversation = setupReplies()
+    const other = agentConversation({ id: 'other', rounds: [conversation.rounds[0], conversation.rounds[2]], activeRoundId: 'followup' })
+    const prompt = '参考 @第2轮图1'
+    useStore.setState({
+      agentConversations: [conversation, other],
+      tasks: useStore.getState().tasks.map((item) => ({ ...item, prompt })),
+    })
+    const original = useStore.getState().tasks.find((item) => item.id === 'task-followup')!
+    await putDbTask(original)
+    expect(await useStore.getState().deleteAgentRound(conversation.id, 'first')).toBe('deleted')
+    const stored = await getAllAgentConversations()
+    const affected = stored.find((item) => item.id === conversation.id)!.rounds.find((item) => item.id === 'followup')!
+    expect(affected.outputTaskPrompts).toEqual({ 'task-followup': '参考 @第1轮图1' })
+    expect((await getAllTasks()).find((item) => item.id === 'task-followup')?.prompt).toBe(prompt)
+    expect(useStore.getState().agentConversations.find((item) => item.id === other.id)).toEqual(other)
+  })
+
+  it('persists renumbered descendant prompts with the conversation when deleting its parent', async () => {
+    const conversation = setupReplies()
+    const prompt = '参考 @第2轮图1'
+    const tasks = useStore.getState().tasks.map((item) => ({ ...item, prompt }))
+    await Promise.all(tasks.map((item) => putDbTask(item)))
+    useStore.setState({ tasks })
+    expect(await useStore.getState().deleteAgentRound(conversation.id, 'first')).toBe('deleted')
+    const stored = await getAllTasks()
+    expect(stored.find((item) => item.id === 'task-followup')?.prompt).toBe('参考 @第1轮图1')
+    expect(stored.find((item) => item.id === 'task-other')?.prompt).toBe(prompt)
+    expect((await getAllAgentConversations()).find((item) => item.id === conversation.id)?.rounds[0].index).toBe(1)
+  })
+
+  it('keeps the original input and its followup when deleting their intermediate reply', async () => {
+    const conversation = setupReplies()
+    expect(await useStore.getState().deleteAgentAssistantMessage(conversation.id, 'reply-first')).toBe('deleted')
+    const updated = useStore.getState().agentConversations[0]
+    expect(updated.rounds[0]).toMatchObject({ id: 'first', assistantMessageId: undefined, responseId: undefined, responseOutput: undefined, outputTaskIds: [] })
+    expect(updated.rounds[1]).toEqual(conversation.rounds[1])
+    expect(updated.rounds[2].parentRoundId).toBe('first')
+    expect(updated.messages.map((message) => message.id)).toContain('user-first')
+    expect(updated.messages.map((message) => message.id)).not.toContain('reply-first')
+    expect(useStore.getState().tasks.map((task) => task.id)).toEqual(['task-variant', 'task-followup', 'task-other'])
+  })
+
   it('renumbers later rounds and remaps image mentions after deleting a middle round', () => {
     const conversation = agentConversation({
       activeRoundId: 'round-3',
@@ -2573,6 +2844,7 @@ describe('agent round deletion', () => {
           prompt: '第一轮',
           inputImageIds: [],
           outputTaskIds: ['task-message', 'task-keep'],
+          outputTaskPrompts: { 'task-message': '删除', 'task-keep': '保留' },
           status: 'done',
           error: null,
           createdAt: 1,
@@ -2587,6 +2859,8 @@ describe('agent round deletion', () => {
           prompt: '第二轮',
           inputImageIds: [],
           outputTaskIds: ['task-round', 'task-missing'],
+          outputTaskPrompts: { 'task-missing': '删除' },
+          deletedOutputTaskWidths: { 'task-missing': 2 },
           status: 'done',
           error: null,
           createdAt: 3,
@@ -2619,6 +2893,9 @@ describe('agent round deletion', () => {
     expect(updated.rounds.every((item) => item.assistantMessageId === undefined)).toBe(true)
     expect(updated.rounds[0].outputTaskIds).toEqual(['task-keep'])
     expect(updated.rounds[1].outputTaskIds).toEqual([])
+    expect(updated.rounds[0].outputTaskPrompts).toEqual({ 'task-keep': '保留' })
+    expect(updated.rounds[1].outputTaskPrompts).toBeUndefined()
+    expect(updated.rounds[1].deletedOutputTaskWidths).toBeUndefined()
     expect(updated.messages.map((message) => message.id)).toEqual(['user-1', 'user-2', 'assistant-keep'])
     expect(updated.messages.find((message) => message.id === 'assistant-keep')?.outputTaskIds).toEqual(['task-keep'])
     expect(state.tasks.map((item) => item.id)).toEqual(['task-keep'])
@@ -2758,6 +3035,7 @@ describe('agent round deletion', () => {
   })
 
   it.each(['updated', 'removed'])('uses current conversation state when deletion fallback runs after it was %s', async (change) => {
+    await initStore()
     const conversation = agentConversation({
       activeRoundId: 'round-a',
       rounds: [{
@@ -3027,6 +3305,44 @@ describe('data import', () => {
     expect(imported).toBe(true)
     expect(state.agentConversations.map((conversation) => conversation.id)).toEqual(['used-conversation'])
     expect(state.activeAgentConversationId).toBe('used-conversation')
+  })
+
+  it.each([false, true])('keeps branch drafts and restores the selected composer after importing an older backup (privacy %s)', async (privacy) => {
+    const rounds: AgentConversation['rounds'] = ['a', 'b'].map((id) => ({
+      id, parentRoundId: null, index: 1, prompt: id, userMessageId: `user-${id}`,
+      inputImageIds: [], outputTaskIds: [], status: 'done', error: null, createdAt: 1, finishedAt: 2,
+    }))
+    const before = agentConversation({ rounds, activeRoundId: 'a' })
+    const profile = createDefaultOpenAIProfile({ id: 'text', apiKey: 'key', apiMode: 'responses' })
+    useStore.setState({
+      settings: normalizeSettings({ ...DEFAULT_SETTINGS, profiles: [profile], activeProfileId: profile.id }),
+      appMode: 'agent', agentConversations: [before], activeAgentConversationId: before.id,
+      prompt: '', inputImages: [], maskDraft: null, agentInputDrafts: {}, agentEditingRoundId: null, privacyMode: null,
+    })
+    const load = (rounds: AgentConversation['rounds']) => importData(importFile({
+      version: 3, exportedAt: new Date(0).toISOString(), tasks: [], imageFiles: {},
+      agentConversations: [{ ...before, rounds }],
+    }), { importConfig: false, importTasks: true })
+    useStore.getState().setPrompt('A 的追问')
+    useStore.getState().setActiveAgentRoundId(before.id, 'b')
+    useStore.getState().setPrompt('B 的追问')
+    if (privacy) useStore.getState().togglePrivacyMode()
+    expect(await load(rounds)).toBe(true)
+    if (privacy) {
+      expect(useStore.getState().activeAgentConversationId).toBeNull()
+      expect(getPersistedState(useStore.getState()).agentInputDrafts[before.id].prompt).toBe('A 的追问')
+      useStore.getState().togglePrivacyMode()
+      useStore.getState().setAppMode('agent')
+      useStore.getState().setActiveAgentConversationId(before.id)
+    }
+    expect(useStore.getState().prompt).toBe('A 的追问')
+    useStore.getState().setActiveAgentRoundId(before.id, 'b')
+    expect(useStore.getState().prompt).toBe('B 的追问')
+    await editAgentRoundMessage(before.id, rounds[1], 'b')
+    useStore.getState().setPrompt('编辑 B')
+    expect(await load([rounds[0]])).toBe(true)
+    expect(useStore.getState()).toMatchObject({ agentEditingRoundId: null, prompt: 'A 的追问' })
+    expect(useStore.getState().agentInputDrafts[agentDraftKey(before.id, 'edit', 'b')]).toBeUndefined()
   })
 
   it('merges imported agent conversations without replacing local conversations', async () => {
@@ -3382,7 +3698,7 @@ describe('agent draft lifecycle', () => {
       updatedAt: 1,
     },
     maskEditorImageId: imageA.id,
-    agentEditingRoundId: 'round-a',
+    agentEditingRoundId: null,
   }
 
   beforeEach(() => {
@@ -3404,6 +3720,49 @@ describe('agent draft lifecycle', () => {
       agentAssetPanelCollapsed: false,
       ...draftState,
     })
+  })
+
+  it('restores the followup draft when switching back to a branch', () => {
+    const state = useStore.getState()
+    state.setActiveAgentRoundId('conversation-a', 'round-a')
+    state.setPrompt('参考 @第2轮图1')
+    state.setInputImages([imageA])
+    state.setActiveAgentRoundId('conversation-a', 'round-b')
+    expect(useStore.getState()).toMatchObject({ prompt: '', inputImages: [] })
+    state.setPrompt('追问 B')
+    state.setActiveAgentRoundId('conversation-a', 'round-a')
+    expect(useStore.getState()).toMatchObject({ prompt: '参考 @第2轮图1', inputImages: [imageA] })
+  })
+
+  it('discards the visible draft when editing a different message', () => {
+    const state = useStore.getState()
+    state.setAgentEditingRoundId('round-a')
+    expect(useStore.getState()).toMatchObject({ prompt: '', inputImages: [], maskDraft: null, maskEditorImageId: null })
+    state.setPrompt('编辑 A')
+    state.setInputImages([imageA])
+    state.setAgentEditingRoundId('round-b')
+    expect(useStore.getState()).toMatchObject({ prompt: '', inputImages: [], agentInputDrafts: {} })
+    state.setAgentEditingRoundId('round-a')
+    expect(useStore.getState().prompt).toBe('')
+  })
+
+  it.each(['改过的消息', ''])('reopens the same edit after visiting the gallery, including cleared text (%s)', async (prompt) => {
+    const state = useStore.getState()
+    const round = { id: 'round-b', index: 1, userMessageId: 'user-b', prompt: '原文', inputImageIds: [], outputTaskIds: [],
+      status: 'done' as const, error: null, createdAt: 1, finishedAt: 2 }
+    useStore.setState({ agentConversations: [agentConversation({ rounds: [round], activeRoundId: round.id })] })
+    await editAgentRoundMessage('conversation-a', round, round.prompt)
+    expect(useStore.getState().prompt).toBe(round.prompt)
+    state.setPrompt(prompt)
+    if (prompt) state.setInputImages([imageB])
+    state.setAppMode('gallery')
+    state.setPrompt('画廊草稿')
+    state.setAppMode('agent')
+    await editAgentRoundMessage('conversation-a', round, round.prompt)
+    expect(useStore.getState()).toMatchObject({ prompt, inputImages: prompt ? [imageB] : [], agentEditingRoundId: round.id })
+    state.setAgentEditingRoundId(null)
+    await editAgentRoundMessage('conversation-a', round, round.prompt)
+    expect(useStore.getState()).toMatchObject({ prompt: round.prompt, inputImages: [] })
   })
 
   it('clears visible input but keeps the agent draft when returning to gallery mode', () => {
@@ -4050,6 +4409,52 @@ describe('task deletion', () => {
     expect(state.selectedTaskIds).toEqual([remaining.id])
     expect((await getAllTasks()).map((item) => item.id)).toEqual([remaining.id])
     expect(state.showToast).toHaveBeenCalledWith('任务已删除', 'success')
+  })
+
+  it('preserves historical image numbers after deleting failed, individual and whole task outputs', async () => {
+    const failed = task({ id: 'failed', status: 'error' })
+    const animals = task({ id: 'animals', outputImages: ['cat', 'dog', 'fox'], removedOutputImageIndices: {} as number[] })
+    const last = task({ id: 'last', outputImages: ['fish'] })
+    const tasks = [failed, animals, last]
+    const first = {
+      id: 'first', index: 1, parentRoundId: null, userMessageId: 'u1', prompt: '生成', inputImageIds: [],
+      outputTaskIds: tasks.map((item) => item.id), status: 'done' as const, error: null, createdAt: 1, finishedAt: 2,
+    }
+    const second = { ...first, id: 'second', index: 2, parentRoundId: first.id, userMessageId: 'u2', outputTaskIds: [] }
+    const conversation = agentConversation({
+      activeRoundId: second.id, rounds: [first, second],
+      messages: [
+        { id: 'u1', roundId: first.id, role: 'user', content: '生成', createdAt: 1 },
+        { id: 'u2', roundId: second.id, role: 'user', content: '@第1轮图1 @第1轮图2 @第1轮图3 @第1轮图4', createdAt: 3 },
+      ],
+    })
+    await putAgentConversation(conversation)
+    await Promise.all(tasks.map(putDbTask))
+    useStore.setState({ tasks, agentConversations: [conversation] })
+    await removeTask(failed)
+    expect(collectAgentRoundOutputImageSlots(useStore.getState().agentConversations[0].rounds[0], useStore.getState().tasks))
+      .toEqual(['cat', 'dog', 'fox', 'fish'])
+    await removeTaskOutput(animals.id, getTaskOutputSlots(animals)[0])
+    const assertReplay = async (slots: Array<string | null>) => {
+      const [stored] = normalizeAgentConversations(JSON.parse(JSON.stringify(await getAllAgentConversations())))
+      const storedTasks = await getAllTasks()
+      expect(collectAgentRoundOutputImageSlots(stored.rounds[0], storedTasks)).toEqual(slots)
+      const input = await buildAgentApiInput({
+        conversation: stored, currentRound: stored.rounds[1], tasks: storedTasks, loadImage: async (id) => id,
+      })
+      const refs = slots.map((id, i) => `<${id ? 'ref' : 'removed_ref'} id="round-1-image-${i + 1}"`)
+      expect(input[2]).toEqual({ role: 'user', content: slots.flatMap((id, i) => [
+        ...(id ? [{ type: 'input_image', image_url: id }] : []),
+        { type: 'input_text', text: expect.stringContaining(refs[i]) },
+      ]) })
+      expect(input[3]).toMatchObject({ content: [{ text: refs.map((ref) => ref + ' />').join(' ') }] })
+    }
+    await assertReplay([null, 'dog', 'fox', 'fish'])
+    const updated = useStore.getState().tasks.find((item) => item.id === animals.id)!
+    await removeTaskOutput(updated.id, getTaskOutputSlots(updated)[1])
+    await assertReplay([null, 'dog', null, 'fish'])
+    await removeTask(updated)
+    await assertReplay([null, null, null, 'fish'])
   })
 
   it('删除中间图片并保存剩余结果、原图和图片参数', async () => {
@@ -5429,7 +5834,7 @@ describe('agent built-in image tool failure', () => {
     })
   })
 
-  it('does not restore a deleted Agent task when its image and final response arrive late', async () => {
+  it.each([false, true])('does not restore a deleted Agent task when its final response arrives late (already generated %s)', async (alreadyGenerated) => {
     let deletedTaskId = ''
     let liveTaskId = ''
     vi.mocked(callAgentResponsesApi).mockImplementationOnce(async (opts) => {
@@ -5441,6 +5846,9 @@ describe('agent built-in image tool failure', () => {
       if (!liveTask) throw new Error('Live Agent task was not created')
       deletedTaskId = runningTask.id
       liveTaskId = liveTask.id
+      if (alreadyGenerated) {
+        await opts.onImageToolCompleted?.({ toolCallId: 'ig-deleted', dataUrl: 'data:image/png;base64,generated' })
+      }
       await removeTask(runningTask)
       await opts.onImageToolCompleted?.({
         toolCallId: 'ig-deleted',
@@ -5474,7 +5882,8 @@ describe('agent built-in image tool failure', () => {
     expect(state.tasks.map((item) => item.id)).toEqual([liveTaskId])
     expect((await getAllTasks()).map((item) => item.id)).toEqual([liveTaskId])
     expect(await getAllImageIds()).toEqual([])
-    expect(round.outputTaskIds).toEqual([liveTaskId])
+    expect(round.outputTaskIds).toEqual(alreadyGenerated ? [deletedTaskId, liveTaskId] : [liveTaskId])
+    expect(collectAgentRoundOutputImageSlots(round, state.tasks)).toEqual(alreadyGenerated ? [null] : [])
     expect(JSON.stringify(round.responseOutput)).not.toContain('ig-deleted')
     expect(JSON.stringify(round.responseOutput)).not.toContain('late-agent-base64')
     expect(JSON.stringify(round.responseOutput)).toContain('ig-live')
@@ -5719,6 +6128,85 @@ describe('agent batch reference resolution', () => {
     })
   })
 
+  it.each(['native-single', 'native-batch', 'hybrid-single', 'hybrid-batch'])('keeps the mask and its target together on %s retry', async (mode) => {
+    const state = useStore.getState()
+    const mask = { id: 'edit-mask', dataUrl: 'data:image/png;base64,bWFzaw==' }
+    await putImage(mask)
+    const imageProfile = createDefaultOpenAIProfile({ id: 'mask-images', apiKey: 'test', apiMode: 'images' })
+    if (mode.startsWith('hybrid')) {
+      state.setSettings(normalizeSettings({ ...state.settings, profiles: [responsesProfile, imageProfile], agentApiConfigMode: 'hybrid',
+        agentTextProfileId: responsesProfile.id, agentImageProfileId: imageProfile.id }))
+    }
+    const conversation = state.agentConversations[0]
+    useStore.setState({ agentConversations: [{ ...conversation, rounds: conversation.rounds.map((round) =>
+      round.id === 'round-2-b' ? { ...round, inputImageIds: [imageA.id], maskImageId: mask.id, maskTargetImageId: imageA.id }
+      : round.id === 'round-1' ? { ...round, inputImageIds: [imageB.id] } : round) }] })
+    const pending = deferred<Awaited<ReturnType<typeof callAgentResponsesApi>>>()
+    vi.mocked(callAgentResponsesApi).mockImplementationOnce(() => pending.promise)
+      .mockResolvedValue({ text: '完成', outputItems: [], images: [], responseId: 'done' })
+    vi.mocked(callImageApi).mockResolvedValue({ images: [imageB.dataUrl] })
+    vi.mocked(callBatchImageSingle).mockResolvedValue({ batchItemId: 'item', image: { dataUrl: imageB.dataUrl }, error: null })
+
+    await retryAgentMessage(conversation.id, 'round-2-b', 'assistant')
+    await vi.waitFor(() => expect(callAgentResponsesApi).toHaveBeenCalled())
+    const firstCall = vi.mocked(callAgentResponsesApi).mock.calls[0][0]
+    expect(firstCall.maskDataUrl).toBe(mask.dataUrl)
+    if (mode.startsWith('native')) {
+      const messages = firstCall.input as { content: { type: string; image_url?: string }[] }[]
+      expect(messages.flatMap((message) => message.content).filter((part) => part.type === 'input_image').map((part) => part.image_url))
+        .toEqual([imageA.dataUrl, imageB.dataUrl])
+    }
+    expect(await state.deleteAgentRound(conversation.id, 'round-1')).toBe('running')
+    expect(await state.deleteAgentAssistantMessage(conversation.id, 'assistant-1')).toBe('running')
+
+    const item = { id: 'item', prompt: '配合 <ref id="round-1-reference-1" /> 编辑底图' }
+    const single = mode.endsWith('single')
+    pending.resolve({ text: '', responseId: 'tool',
+      images: mode === 'native-single' ? [{ dataUrl: imageB.dataUrl, toolCallId: 'builtin' }] : [],
+      outputItems: mode === 'native-single' ? [] : [{ type: 'function_call', call_id: 'fn',
+        name: single ? 'generate_image' : 'generate_image_batch', arguments: JSON.stringify(single ? item : { images: [item] }) }] })
+    await vi.waitFor(() => expect(useStore.getState().agentConversations[0].rounds.find((round) => round.id === useStore.getState().agentConversations[0].activeRoundId)?.status).toBe('done'))
+    if (mode.startsWith('hybrid')) {
+      expect(vi.mocked(callImageApi).mock.lastCall?.[0]).toMatchObject({
+        maskDataUrl: mask.dataUrl, inputImageDataUrls: [imageA.dataUrl, imageB.dataUrl],
+      })
+    } else if (!single) {
+      expect(vi.mocked(callBatchImageSingle).mock.lastCall?.[0]).toMatchObject({
+        maskDataUrl: mask.dataUrl, referenceImageDataUrls: [imageA.dataUrl, imageB.dataUrl],
+        referenceIds: ['round-2-reference-1', 'round-1-reference-1'],
+      })
+    }
+    const activeRoundId = useStore.getState().agentConversations[0].activeRoundId
+    expect(useStore.getState().tasks.find((task) => task.agentRoundId === activeRoundId)).toMatchObject({
+      maskTargetImageId: imageA.id, maskImageId: mask.id, inputImageIds: mode === 'native-single' ? [imageA.id] : [imageA.id, imageB.id],
+    })
+  })
+
+  it('keeps ancestor references stable while preparing a new round', async () => {
+    vi.mocked(callAgentResponsesApi).mockResolvedValueOnce({ text: '完成', images: [], outputItems: [] })
+    const submission = submitAgentMessage()
+    const state = useStore.getState()
+    expect(state.agentConversations[0].rounds.some((round) => round.status === 'running')).toBe(false)
+    expect(await state.deleteAgentRound('conversation-a', 'round-1')).toBe('running')
+    await submission
+  })
+
+  it('does not submit a partially resolved batch item when a referenced slot is missing', async () => {
+    vi.mocked(callAgentResponsesApi).mockResolvedValueOnce({
+      text: '', images: [], responseId: 'missing-ref',
+      outputItems: [{ type: 'function_call', name: 'generate_image_batch', call_id: 'missing',
+        arguments: JSON.stringify({ images: [{ id: 'item', prompt: '<ref id="round-2-image-1" /> <ref id="round-2-image-2" />' }] }) }],
+    })
+    await submitAgentMessage()
+    await vi.waitFor(() => {
+      const conversation = useStore.getState().agentConversations[0]
+      expect(conversation.rounds.find((round) => round.id === conversation.activeRoundId)).toMatchObject({
+        status: 'error', error: '参考图片 round-2-image-2 已不存在',
+      })
+    })
+    expect(callBatchImageSingle).not.toHaveBeenCalled()
+  })
+
   it('resolves batch references from the active branch path only', async () => {
     vi.mocked(callAgentResponsesApi)
       .mockResolvedValueOnce({
@@ -5800,7 +6288,8 @@ describe('agent assistant regeneration', () => {
   const responsesProfile = createDefaultOpenAIProfile({ id: 'openai-responses', apiKey: 'openai-key', apiMode: 'responses' })
   let response: ReturnType<typeof deferred<Awaited<ReturnType<typeof callAgentResponsesApi>>>>
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await putImage(imageA)
     response = deferred<Awaited<ReturnType<typeof callAgentResponsesApi>>>()
     vi.mocked(callAgentResponsesApi).mockReset().mockImplementation(() => response.promise)
     useStore.setState({
@@ -5810,6 +6299,8 @@ describe('agent assistant regeneration', () => {
         activeProfileId: responsesProfile.id,
         alwaysShowRetryButton: false,
       }),
+      appMode: 'agent',
+      activeAgentConversationId: 'conversation-a',
       params: { ...DEFAULT_PARAMS, n: 4 },
       agentEditingRoundId: 'round-a',
       agentConversations: [
@@ -5855,8 +6346,266 @@ describe('agent assistant regeneration', () => {
     })
   })
 
+  it.each([
+    { streamImages: false, scope: 'reply' }, { streamImages: true, scope: 'reply' },
+    { streamImages: true, scope: 'conversation' }, { streamImages: true, scope: 'conversation-and-tasks' },
+  ])('discards late image writes after deleting $scope (streaming $streamImages)', async ({ streamImages, scope }) => {
+    const profile = { ...responsesProfile, streamImages }
+    useStore.setState({ settings: normalizeSettings({ ...DEFAULT_SETTINGS, profiles: [profile], activeProfileId: profile.id }) })
+    await putImage({ ...imageA, source: 'upload', createdAt: 1 })
+    const originalWrite = vi.mocked(storeImageWithSize).getMockImplementation()!
+    const release = deferred<void>()
+    const entered = deferred<void>()
+    vi.mocked(storeImageWithSize).mockImplementationOnce(async (...args) => {
+      entered.resolve()
+      await release.promise
+      return originalWrite(...args)
+    })
+    const image = { dataUrl: 'data:image/png;base64,late-branch-result', toolCallId: 'late-branch-image' }
+    vi.mocked(callAgentResponsesApi).mockImplementationOnce(async (opts) => {
+      await opts.onImageToolStarted?.({ toolCallId: image.toolCallId })
+      await opts.onImageToolCompleted?.(image)
+      return { images: [image], text: '迟到回复', outputItems: [], responseId: 'late-response' }
+    })
+    const keep = task({ id: 'previous-output', sourceMode: 'agent', agentConversationId: 'conversation-a', outputImages: [imageB.id] })
+    useStore.setState({ tasks: [keep] })
+    await putDbTask(keep)
+    await putImage({ ...imageB, source: 'generated', createdAt: 1 })
+    await retryAgentMessage('conversation-a', 'round-a', 'assistant')
+    await entered.promise
+    const [conversation] = useStore.getState().agentConversations
+    const id = conversation.activeRoundId!
+    if (scope === 'reply') {
+      stopAgentResponse(conversation.id)
+      const stopped = useStore.getState().agentConversations[0].messages.find((message) => message.roundId === id && message.role === 'assistant')!
+      expect(await useStore.getState().deleteAgentAssistantMessage(conversation.id, stopped.id)).toBe('deleted')
+    } else {
+      await useStore.getState().deleteAgentConversation(conversation.id, scope === 'conversation-and-tasks')
+    }
+    const deletes = vi.mocked(deleteDbImage).mock.calls.length
+    release.resolve()
+    await vi.waitFor(() => expect(vi.mocked(deleteDbImage).mock.calls.length).toBeGreaterThan(deletes))
+    const state = useStore.getState()
+    if (scope === 'reply') {
+      expect(state.tasks.some((task) => task.agentRoundId === id)).toBe(false)
+      expect(state.agentConversations[0].messages.some((message) => message.roundId === id)).toBe(false)
+      expect(state.agentConversations[0].rounds.map((round) => round.id)).toEqual(['round-a'])
+    } else {
+      expect(state.agentConversations).toHaveLength(0)
+      expect(state.tasks.some((task) => task.status === 'running')).toBe(false)
+      if (scope === 'conversation-and-tasks') {
+        expect(state.tasks).toEqual([])
+        expect(await getAllImageIds()).not.toContain(imageB.id)
+      } else {
+        expect(state.tasks.find((item) => item.id === keep.id)).toEqual(keep)
+        expect(await getAllImageIds()).toContain(imageB.id)
+      }
+    }
+  })
+
+  it('gives repeated image tool IDs independent tasks in each reply', async () => {
+    const profile = { ...responsesProfile, streamImages: true }
+    useStore.setState({ settings: normalizeSettings({ ...DEFAULT_SETTINGS, profiles: [profile], activeProfileId: profile.id }), tasks: [] })
+    await putImage({ ...imageA, source: 'upload', createdAt: 1 })
+    vi.mocked(callAgentResponsesApi).mockImplementation(async (opts) => {
+      const image = { toolCallId: 'same-call', dataUrl: `data:image/png;base64,${useStore.getState().tasks.length}` }
+      await opts.onImageToolStarted?.({ toolCallId: image.toolCallId })
+      await opts.onImageToolCompleted?.(image)
+      return { images: [image], text: '完成', outputItems: [], responseId: 'response' }
+    })
+    for (let i = 0; i < 2; i++) {
+      await retryAgentMessage('conversation-a', 'round-a', 'assistant')
+      await vi.waitFor(() => expect(useStore.getState().agentConversations[0].rounds.every((round) => round.status !== 'running')).toBe(true))
+    }
+    const [first, second] = useStore.getState().agentConversations[0].rounds.slice(1)
+    expect(first.outputTaskIds).toHaveLength(1)
+    expect(second.outputTaskIds).toHaveLength(1)
+    expect(first.outputTaskIds[0]).not.toBe(second.outputTaskIds[0])
+    expect(useStore.getState().tasks.filter((task) => task.agentToolCallId === 'same-call').map((task) => task.agentRoundId).sort()).toEqual([first.id, second.id].sort())
+  })
+
+  it('keeps the edited message and its attachments when reselecting Agent mode', () => {
+    const state = useStore.getState()
+    state.setPrompt('编辑中的消息')
+    state.setInputImages([imageA])
+    state.setAppMode('agent')
+    expect(useStore.getState()).toMatchObject({ agentEditingRoundId: 'round-a', prompt: '编辑中的消息', inputImages: [imageA] })
+  })
+
+  it('shows a submitted followup while keeping the newly opened ancestor edit', async () => {
+    const state = useStore.getState()
+    useStore.setState({ agentEditingRoundId: null, prompt: '带图追问', inputImages: [imageA], maskDraft: null })
+    const pending = submitAgentMessage()
+    state.setAgentEditingRoundId('round-a')
+    state.setPrompt('正在修改原消息')
+    await pending
+    const latest = useStore.getState()
+    const [conversation] = latest.agentConversations
+    expect(getActiveAgentRounds(conversation).map((round) => round.prompt)).toEqual(['画一只猫', '带图追问'])
+    expect(latest).toMatchObject({ agentEditingRoundId: 'round-a', prompt: '正在修改原消息' })
+    state.setAgentEditingRoundId(null)
+    expect(useStore.getState().agentConversations[0].activeRoundId).toBe(conversation.rounds[1].id)
+  })
+
+  it('continues the current conversation after leaving privacy mode while editing its first message', async () => {
+    const state = useStore.getState()
+    state.togglePrivacyMode()
+    state.setAppMode('agent')
+    const id = state.createAgentConversation()
+    const conversation = () => useStore.getState().agentConversations.find((item) => item.id === id)!
+    const api = vi.mocked(callAgentResponsesApi)
+    api.mockResolvedValue({ text: '收到', images: [], outputItems: [], responseId: 'reply' })
+    for (const prompt of ['第一轮', '第二轮']) {
+      state.setPrompt(prompt)
+      await submitAgentMessage()
+      await vi.waitFor(() => expect(conversation().rounds.every((round) => round.status === 'done')).toBe(true))
+    }
+    const [first, second] = conversation().rounds
+    await editAgentRoundMessage(id, first, first.prompt)
+    expect(useStore.getState().agentEditingRoundId).toBe(first.id)
+    state.togglePrivacyMode()
+    expect(useStore.getState()).toMatchObject({ agentEditingRoundId: null, prompt: '' })
+
+    state.setPrompt('继续追问')
+    await submitAgentMessage()
+    expect(conversation().rounds[2].parentRoundId).toBe(second.id)
+    await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(3))
+    expect(api.mock.calls[2][0].input).toMatchObject([
+      { role: 'user', content: [{ text: '第一轮' }] },
+      { role: 'assistant', content: [{ text: '收到' }] },
+      { role: 'user', content: [{ text: '第二轮' }] },
+      { role: 'assistant', content: [{ text: '收到' }] },
+      { role: 'user', content: [{ text: '继续追问' }] },
+    ])
+  })
+
+  it('ignores images loaded after switching to another edit', async () => {
+    const [conversation] = useStore.getState().agentConversations
+    const original = { ...conversation.rounds[0], id: 'edit-a', inputImageIds: ['slow-edit-image'] }
+    const other = { ...original, id: 'edit-b', inputImageIds: [] }
+    useStore.setState({ agentConversations: [{ ...conversation, rounds: [original, other] }] })
+    const loading = deferred<Awaited<ReturnType<typeof getImage>>>()
+    vi.mocked(getImage).mockImplementationOnce(() => loading.promise)
+    const pending = editAgentRoundMessage(conversation.id, original, '编辑 A')
+    await editAgentRoundMessage(conversation.id, other, '编辑 B')
+    loading.resolve(undefined)
+    await pending
+    expect(useStore.getState()).toMatchObject({ agentEditingRoundId: other.id, prompt: '编辑 B', inputImages: [] })
+  })
+
+  it('keeps the visible draft when the historical mask is unavailable and blocks a submit while it loads', async () => {
+    const state = useStore.getState()
+    const conversation = state.agentConversations[0]
+    const original = { ...conversation.rounds[0], inputImageIds: ['delayed-base'], maskTargetImageId: 'delayed-base', maskImageId: 'lost-edit-mask' }
+    useStore.setState({
+      agentConversations: [{ ...conversation, rounds: [original] }], agentEditingRoundId: null, agentInputDrafts: {},
+      prompt: '尚未发出的追问', inputImages: [], maskDraft: null,
+    })
+    const loading = deferred<Awaited<ReturnType<typeof getImage>>>()
+    vi.mocked(getImage).mockImplementationOnce(() => loading.promise)
+    const pending = editAgentRoundMessage(conversation.id, original, original.prompt)
+    await submitAgentMessage()
+    expect(state.showToast).toHaveBeenCalledWith('正在读取待编辑消息的图片，请稍候', 'info')
+    loading.resolve({ ...imageA, id: 'delayed-base' })
+    await pending
+    expect(state.showToast).toHaveBeenCalledWith('遮罩或底图已不存在，无法编辑此消息', 'error')
+    expect(useStore.getState()).toMatchObject({ agentEditingRoundId: null, prompt: '尚未发出的追问' })
+    expect(callAgentResponsesApi).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('consumes a pending public submission while preserving the private draft (first message %s)', async (first) => {
+    const state = useStore.getState()
+    if (first) useStore.setState({ agentConversations: [], activeAgentConversationId: null })
+    useStore.setState({ agentEditingRoundId: null, maskDraft: null, agentInputDrafts: {} })
+    state.setPrompt('公开会话的带图消息')
+    state.setInputImages([imageA])
+    const pending = submitAgentMessage()
+    const id = useStore.getState().activeAgentConversationId!
+    state.togglePrivacyMode()
+    expect(useStore.getState().privacyMode?.hiddenConversationIds.has(id)).toBe(true)
+    state.setAppMode('agent')
+    const privateId = state.createAgentConversation()
+    expect(privateId).not.toBe(id)
+    state.setPrompt('隐私模式的草稿')
+    await pending
+    const current = useStore.getState()
+    expect(current.prompt).toBe('隐私模式的草稿')
+    expect(current.privacyMode?.inputSnapshot).toMatchObject({ prompt: '', inputImages: [] })
+    expect(current.privacyMode?.inputSnapshot.agentInputDrafts[id]).toBeUndefined()
+    const rounds = current.agentConversations.find((item) => item.id === id)!.rounds
+    expect(rounds[rounds.length - 1].prompt).toBe('公开会话的带图消息')
+    state.togglePrivacyMode()
+    state.setActiveAgentConversationId(id)
+    expect(useStore.getState()).toMatchObject({ prompt: '', inputImages: [] })
+  })
+
+  it('cancels a preparing submission when deleting a conversation and clears its privacy snapshot', async () => {
+    const state = useStore.getState()
+    state.setAgentEditingRoundId(null)
+    state.setPrompt('删除前的追问')
+    state.setInputImages([imageA])
+    const pending = submitAgentMessage()
+    state.togglePrivacyMode()
+    expect(useStore.getState().privacyMode?.inputSnapshot.activeAgentConversationId).toBe('conversation-a')
+    await state.deleteAgentConversation('conversation-a')
+    await pending
+    const snapshot = useStore.getState().privacyMode!.inputSnapshot
+    expect(snapshot).toMatchObject({ activeAgentConversationId: null, prompt: '', inputImages: [] })
+    expect(snapshot.agentInputDrafts).not.toHaveProperty('conversation-a')
+    state.togglePrivacyMode()
+    expect(useStore.getState().agentConversations).toEqual([])
+    expect(useStore.getState().agentInputDrafts).not.toHaveProperty('conversation-a')
+    expect(callAgentResponsesApi).not.toHaveBeenCalled()
+  })
+
+  it('keeps a pending send on its captured branch and consumes the submitted draft only once', async () => {
+    const state = useStore.getState()
+    const original = state.agentConversations[0]
+    const other = { ...original.rounds[0], id: 'round-b', userMessageId: 'user-b' }
+    useStore.setState({
+      appMode: 'agent', activeAgentConversationId: original.id, agentEditingRoundId: null,
+      agentConversations: [{ ...original, rounds: [...original.rounds, other] }],
+      prompt: '追问 A', inputImages: [imageA], maskDraft: null, agentInputDrafts: {},
+    })
+    const pending = submitAgentMessage()
+    const duplicate = submitAgentMessage()
+    state.setActiveAgentRoundId(original.id, other.id)
+    state.setPrompt('追问 B')
+    await Promise.all([pending, duplicate])
+    const latest = useStore.getState()
+    const [conversation] = latest.agentConversations
+    expect(conversation.rounds).toHaveLength(3)
+    expect(conversation.rounds[2]).toMatchObject({ parentRoundId: 'round-a', prompt: '追问 A' })
+    expect(conversation.activeRoundId).toBe(other.id)
+    expect(latest.prompt).toBe('追问 B')
+    expect(Object.values(latest.agentInputDrafts).some((draft) => draft.prompt === '追问 A')).toBe(false)
+  })
+
+  it.each(['assistant', 'user'] as const)('blocks a %s retry while a gallery batch is active', async (role) => {
+    useStore.getState().setBatchProgress({ started: 1, finished: 0, total: 2 })
+    try {
+      await retryAgentMessage('conversation-a', 'round-a', role)
+      expect(useStore.getState().showToast).toHaveBeenCalledWith('画廊批量任务进行中，请等待完成或回到画廊停止后再提交', 'error')
+      expect(useStore.getState().agentConversations[0].rounds).toHaveLength(1)
+      expect(callAgentResponsesApi).not.toHaveBeenCalled()
+    } finally {
+      useStore.getState().setBatchProgress(null)
+    }
+  })
+
+  it.each(['assistant', 'user'] as const)('fails a %s retry before sending when its stored attachment is missing', async (role) => {
+    const original = useStore.getState().agentConversations[0]
+    useStore.setState({ agentConversations: [{ ...original, rounds: [{ ...original.rounds[0], inputImageIds: ['missing-source'] }] }] })
+    await retryAgentMessage(original.id, original.rounds[0].id, role)
+    await vi.waitFor(() => expect(useStore.getState().agentConversations[0].rounds[1]).toMatchObject({
+      status: 'error', error: '第 1 张输入图片已不存在',
+    }))
+    expect(callAgentResponsesApi).not.toHaveBeenCalled()
+    expect(useStore.getState().agentConversations[0].rounds[0].status).toBe('done')
+  })
+
   it('creates a sibling round from the assistant message regardless of retry setting', async () => {
-    await regenerateAgentAssistantMessage('conversation-a', 'round-a')
+    await retryAgentMessage('conversation-a', 'round-a', 'assistant')
 
     const conversation = useStore.getState().agentConversations[0]
     const newRound = conversation.rounds.find((round) => round.id !== 'round-a')
@@ -5878,7 +6627,7 @@ describe('agent assistant regeneration', () => {
     expect(useStore.getState().agentEditingRoundId).toBeNull()
   })
 
-  it('overwrites the same round when regenerating an error assistant message', async () => {
+  it.each(['user', 'assistant'] as const)('preserves the failed round when retrying the %s card', async (role) => {
     useStore.setState({
       agentConversations: [
         agentConversation({
@@ -5906,22 +6655,17 @@ describe('agent assistant regeneration', () => {
       ],
     })
 
-    await regenerateAgentAssistantMessage('conversation-a', 'round-a')
+    await retryAgentMessage('conversation-a', 'round-a', role)
 
     const conversation = useStore.getState().agentConversations[0]
-    expect(conversation.rounds).toHaveLength(1)
-    expect(conversation.activeRoundId).toBe('round-a')
-    expect(conversation.rounds[0]).toMatchObject({
-      id: 'round-a',
-      status: 'running',
-      error: null,
-      outputTaskIds: [],
-      finishedAt: null,
-    })
-    expect(conversation.messages.find((message) => message.id === 'assistant-a')).toMatchObject({
-      content: '',
-      outputTaskIds: [],
-    })
+    expect(conversation.rounds).toHaveLength(2)
+    const [original, retry] = conversation.rounds
+    expect(original).toMatchObject({ status: 'error', error: '失败', outputTaskIds: ['task-a'] })
+    expect(conversation.messages.find((message) => message.id === 'assistant-a')?.content).toBe('请求失败：失败')
+    expect(conversation.activeRoundId).toBe(retry.id)
+    expect(retry.userBranchId).toBe(role === 'assistant' ? original.userMessageId : retry.userMessageId)
+    expect(retry.userMessageId).not.toBe(original.userMessageId)
+    expect(retry.outputTaskIds).toEqual([])
   })
 })
 

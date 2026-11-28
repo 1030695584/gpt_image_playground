@@ -1,8 +1,9 @@
 import type { AgentConversation, AgentMessage, AgentRound, ResponsesOutputItem, TaskRecord } from '../types'
-import { getAgentRoundPath } from './agentConversationState'
+import { getAgentAssistantMessage, getAgentRoundPath } from './agentConversationState'
 import { getTaskPromptText } from './promptImageMentions'
 import {
-  collectAgentRoundOutputImageSlots,
+  getAgentRemovedReferenceTag,
+  getAgentTaskImageSlots,
   getAgentCurrentReferenceId,
   getAgentGeneratedImageReferenceId,
   replaceAgentPromptImageReferencesForApi,
@@ -12,6 +13,7 @@ import { getAgentRoundResponseOutput, sanitizeResponseOutputForInput } from './a
 type LoadImage = (id: string) => Promise<string | null | undefined>
 
 interface BuildAgentApiInputOptions {
+  maskTargetImageId?: string
   conversation: AgentConversation
   currentRound: AgentRound
   tasks: TaskRecord[]
@@ -30,23 +32,27 @@ interface BuildAgentContinuationInputOptions {
   loadImage: LoadImage
 }
 
-async function createUserInputItem(
-  conversation: AgentConversation,
-  round: AgentRound,
-  message: AgentMessage,
-  tasks: TaskRecord[],
-  loadImage: LoadImage,
-) {
+async function createUserInputItem(options: BuildAgentApiInputOptions, round: AgentRound, message: AgentMessage, missing: Set<string>) {
+  const current = round.id === options.currentRound.id
   const imageDataUrls: string[] = []
-  for (const id of round.inputImageIds) {
-    const dataUrl = await loadImage(id)
-    if (dataUrl) imageDataUrls.push(dataUrl)
+  const refs: string[] = []
+  for (const [index, id] of round.inputImageIds.entries()) {
+    if (current && id === options.maskTargetImageId) continue
+    const ref = getAgentCurrentReferenceId(round, index)
+    const dataUrl = await options.loadImage(id)
+    if (!dataUrl) {
+      if (current) throw new Error(`第 ${index + 1} 张输入图片已不存在`)
+      missing.add(ref)
+      continue
+    }
+    imageDataUrls.push(dataUrl)
+    refs.push(`\n  <ref id="${ref}" />`)
   }
-  const rounds = getAgentRoundPath(conversation, round.id)
-  const text = replaceAgentPromptImageReferencesForApi(message.content, round, rounds, tasks)
-  const referenceText = round.inputImageIds.length > 0
-    ? `\n\n<available_refs>${round.inputImageIds.map((_, index) => `\n  <ref id="${getAgentCurrentReferenceId(round, index)}" />`).join('')}\n</available_refs>`
-    : ''
+  const rounds = getAgentRoundPath(options.conversation, round.id)
+  const text = replaceAgentPromptImageReferencesForApi(message.content, round, rounds, options.tasks)
+    .replace(/<ref\b[^>]*?\bid=(["'])(round-\d+-(?:image|reference)-\d+)\1[^>]*>/g,
+      (tag, _quote: string, id: string) => missing.has(id) ? getAgentRemovedReferenceTag(id) : tag)
+  const referenceText = refs.length ? `\n\n<available_refs>${refs.join('')}\n</available_refs>` : ''
   return {
     role: 'user',
     content: [
@@ -65,7 +71,8 @@ function escapeXmlAttribute(value: string) {
 }
 
 function createGeneratedImageReferencePart(round: AgentRound, task: TaskRecord, imageIndex: number) {
-  const prompt = getTaskPromptText(typeof task.prompt === 'string' ? task.prompt : '', task.inputImageIds.length).replace(/\s+/g, ' ').trim()
+  const stored = round.outputTaskPrompts?.[task.id] ?? task.prompt
+  const prompt = getTaskPromptText(typeof stored === 'string' ? stored : '', task.inputImageIds.length).replace(/\s+/g, ' ').trim()
   const truncatedPrompt = prompt.length > 1200 ? `${prompt.slice(0, 1200)}...` : prompt
   const promptAttribute = truncatedPrompt ? ` prompt="${escapeXmlAttribute(truncatedPrompt)}"` : ''
   return {
@@ -74,47 +81,27 @@ function createGeneratedImageReferencePart(round: AgentRound, task: TaskRecord, 
   }
 }
 
-async function createGeneratedImagesInputItem(round: AgentRound, tasks: TaskRecord[], loadImage: LoadImage) {
+async function getGeneratedImageInputs(round: AgentRound, tasks: TaskRecord[], loadImage: LoadImage, missing: Set<string>, batchTaskIds?: string[]) {
   const content: Array<{ type: string; text?: string; image_url?: string }> = []
+  const refs: string[] = []
   let imageIndex = 0
   for (const taskId of round.outputTaskIds) {
     const task = tasks.find((item) => item.id === taskId)
-    if (!task) {
-      content.push({ type: 'input_text', text: `<removed_ref id="${getAgentGeneratedImageReferenceId(round, imageIndex)}" />` })
-      imageIndex += 1
-      continue
-    }
-    for (const imageId of task.outputImages) {
-      const dataUrl = await loadImage(imageId)
-      if (dataUrl) content.push({ type: 'input_image', image_url: dataUrl })
-      content.push(createGeneratedImageReferencePart(round, task, imageIndex))
-      imageIndex += 1
-    }
-  }
-  return content.length > 0 ? { role: 'user', content } : null
-}
-
-async function createBatchImagesInputItem(round: AgentRound, tasks: TaskRecord[], batchTaskIds: string[], loadImage: LoadImage) {
-  const content: Array<{ type: string; text?: string; image_url?: string }> = []
-  let baseImageIndex = 0
-  for (const taskId of round.outputTaskIds) {
-    if (batchTaskIds.includes(taskId)) break
-    const task = tasks.find((item) => item.id === taskId)
-    baseImageIndex += task ? task.outputImages.length : 1
-  }
-
-  let imageIndex = baseImageIndex
-  for (const taskId of batchTaskIds) {
-    const task = tasks.find((item) => item.id === taskId)
-    if (!task || task.status !== 'done') continue
-    for (const imageId of task.outputImages) {
-      const dataUrl = await loadImage(imageId)
-      if (dataUrl) content.push({ type: 'input_image', image_url: dataUrl })
-      content.push(createGeneratedImageReferencePart(round, task, imageIndex))
-      imageIndex += 1
+    const include = !batchTaskIds || (batchTaskIds.includes(taskId) && task?.status === 'done')
+    for (const imageId of getAgentTaskImageSlots(task, round.deletedOutputTaskWidths?.[taskId])) {
+      const ref = getAgentGeneratedImageReferenceId(round, imageIndex)
+      const dataUrl = imageId ? await loadImage(imageId) : null
+      if (dataUrl && task) {
+        refs.push(`<ref id="${ref}" />`)
+        if (include) content.push({ type: 'input_image', image_url: dataUrl }, createGeneratedImageReferencePart(round, task, imageIndex))
+      } else {
+        missing.add(ref)
+        if (include) content.push({ type: 'input_text', text: getAgentRemovedReferenceTag(ref) })
+      }
+      imageIndex++
     }
   }
-  return content.length > 0 ? { role: 'user', content } : null
+  return { item: content.length ? { role: 'user', content } : null, refs }
 }
 
 function createAssistantFallbackItem(text: string) {
@@ -126,36 +113,43 @@ function createAssistantFallbackItem(text: string) {
 
 export async function buildAgentApiInput(options: BuildAgentApiInputOptions): Promise<unknown[]> {
   const input: unknown[] = []
+  const missing = new Set<string>()
   const rounds = getAgentRoundPath(options.conversation, options.currentRound.id)
 
+  // 原生图像工具将遮罩应用于请求中的第一张图片
+  if (options.maskTargetImageId) {
+    const index = options.currentRound.inputImageIds.indexOf(options.maskTargetImageId)
+    const image = await options.loadImage(options.maskTargetImageId)
+    if (index < 0 || !image) throw new Error('遮罩底图已不存在')
+    input.push({ role: 'user', content: [
+      { type: 'input_text', text: `Mask edit target: <ref id="${getAgentCurrentReferenceId(options.currentRound, index)}" />` },
+      { type: 'input_image', image_url: image },
+    ] })
+  }
   for (const round of rounds) {
     const userMessage = options.conversation.messages.find((message) => message.id === round.userMessageId)
     if (!userMessage) continue
 
-    input.push(await createUserInputItem(options.conversation, round, userMessage, options.tasks, options.loadImage))
+    input.push(await createUserInputItem(options, round, userMessage, missing))
     if (round.id === options.currentRound.id) continue
 
+    const assistantMessage = getAgentAssistantMessage(options.conversation, round)
+    if (!assistantMessage && !round.outputTaskIds.length) continue
     const output = getAgentRoundResponseOutput(round, options.tasks)
     if (output?.length) {
       const sanitizedOutput = sanitizeResponseOutputForInput(output)
       if (sanitizedOutput.length > 0) {
         input.push(...sanitizedOutput)
       } else {
-        const assistantMessage = round.assistantMessageId
-          ? options.conversation.messages.find((message) => message.id === round.assistantMessageId)
-          : null
         input.push(createAssistantFallbackItem(assistantMessage?.content || '图像已生成。'))
       }
     } else {
-      const assistantMessage = round.assistantMessageId
-        ? options.conversation.messages.find((message) => message.id === round.assistantMessageId)
-        : null
       input.push(createAssistantFallbackItem(assistantMessage?.content || '[No text response]'))
     }
 
     if (round.outputTaskIds.length > 0) {
-      const imagesItem = await createGeneratedImagesInputItem(round, options.tasks, options.loadImage)
-      if (imagesItem) input.push(imagesItem)
+      const images = await getGeneratedImageInputs(round, options.tasks, options.loadImage, missing)
+      if (images.item) input.push(images.item)
     }
   }
 
@@ -174,15 +168,12 @@ export async function buildAgentContinuationInput(options: BuildAgentContinuatio
     ...sanitizeResponseOutputForInput(currentRoundOutput, { allowPendingFunctionCalls: true }),
     ...(options.functionCallOutputs ?? []),
   ]
-  const batchImagesItem = await createBatchImagesInputItem(options.currentRound, options.tasks, options.batchTaskIds, options.loadImage)
-  if (batchImagesItem) input.push(batchImagesItem)
+  const images = await getGeneratedImageInputs(options.currentRound, options.tasks, options.loadImage, new Set(), options.batchTaskIds)
+  if (images.item) input.push(images.item)
 
-  const newImageRefs = collectAgentRoundOutputImageSlots(options.currentRound, options.tasks)
-    .map((imageId, index) => imageId ? `<ref id="${getAgentGeneratedImageReferenceId(options.currentRound, index)}" />` : null)
-    .filter((ref): ref is string => Boolean(ref))
   const lines = ['[System] The app has saved your generated outputs and is continuing the same Agent turn.']
-  if (newImageRefs.length > 0) {
-    lines.push(`The following image ref ids are now available for you to reference in subsequent image_generation prompts: ${newImageRefs.join(', ')}`)
+  if (images.refs.length > 0) {
+    lines.push(`The following image ref ids are now available for you to reference in subsequent image_generation prompts: ${images.refs.join(', ')}`)
   }
   lines.push(
     'Continue generating. Do NOT repeat what you already said in earlier responses.',

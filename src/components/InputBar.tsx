@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImageFromFile, removeMultipleTasks, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import { getInputImageLimit, getInputImageProfile } from '../lib/inputImageLimits'
-import { getActiveAgentRounds } from '../lib/agentConversationState'
+import { getAgentInputHistory } from '../lib/agentConversationState'
 import { createSettingsForApiProfile, getCustomProviderDefinition, getActiveApiProfile, getAgentImageApiProfile, getApiProfileModelGroups } from '../lib/apiProfiles'
 import { getImageModelFamily } from '../lib/imageModels'
 import { getImageSearchSupport, getImageThinkingSupport } from '../lib/imageSearch'
@@ -126,6 +126,7 @@ export default function InputBar() {
   const defaultFavoriteCollectionId = useStore((s) => s.defaultFavoriteCollectionId)
   const agentConversations = useStore((s) => s.agentConversations)
   const activeAgentConversationId = useStore((s) => s.activeAgentConversationId)
+  const agentEditingRoundId = useStore((s) => s.agentEditingRoundId)
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
@@ -487,7 +488,8 @@ export default function InputBar() {
   const batchRunning = Boolean(batchProgress)
   const parameterControls = getImageParameterControls(effectiveSettings, activeProfile, params, { hasInputImages: inputImages.length > 0, agent: appMode === 'agent' })
   const maskDisabledReason = maskDraft ? getMaskDisabledReason(activeProfile, parameterControls.output.format) : undefined
-  const canSubmit = Boolean(prompt.trim() && hasSubmitApiConfig && !activeAgentIsRunning && !batchRunning && !maskDisabledReason)
+  const loadingImages = inputImages.some((img) => !img.dataUrl)
+  const canSubmit = Boolean(prompt.trim() && hasSubmitApiConfig && !activeAgentIsRunning && !batchRunning && !maskDisabledReason && !loadingImages)
   const batchEnabled = appMode === 'gallery' && settings.showBatchPrompt && settings.batchPromptEnabled
   // 批量进行中始终在画廊显示入口，以便查看进度和停止
   const showBatch = appMode === 'gallery' && (settings.showBatchPrompt || batchRunning)
@@ -503,9 +505,12 @@ export default function InputBar() {
     ? `${maskDisabledReason}，请移除遮罩或切换模型／格式`
     : !hasSubmitApiConfig
     ? '尚未完成 API 配置，请在右上角设置中进行'
+    : loadingImages
+    ? '正在读取参考图'
     : appMode === 'agent'
     ? '画廊批量任务进行中，请等待完成或回到画廊停止后再提交'
     : '批量任务进行中，请等待完成或停止后再提交'
+  const showSubmitTooltip = submitHover && (activeAgentIsRunning || !hasSubmitApiConfig || batchRunning || Boolean(maskDisabledReason) || loadingImages)
   const promptPlaceholder = batchEnabled
     ? '每条提示词之间空两行分隔，可输入 @ 来指定参考图...'
     : '描述你想生成的图片，可输入 @ 来指定参考图...'
@@ -579,7 +584,7 @@ export default function InputBar() {
   const visiblePrompt = stripImageMentionMarkers(prompt)
   const agentOutputImageOptions = useMemo<AtImageOption[]>(() => {
     if (!activeAgentConversation) return []
-    return getActiveAgentRounds(activeAgentConversation).flatMap((round) =>
+    return getAgentInputHistory(activeAgentConversation, agentEditingRoundId).flatMap((round) =>
       collectAgentRoundOutputImageSlots(round, tasks).flatMap((imageId, imageIndex) => {
         if (!imageId) return []
         const label = `@第${round.index}轮图${imageIndex + 1}`
@@ -592,7 +597,7 @@ export default function InputBar() {
         }
       }),
     )
-  }, [activeAgentConversation, tasks])
+  }, [activeAgentConversation, agentEditingRoundId, tasks])
   const atImageSourceCount = inputImages.length + agentOutputImageOptions.length
   const atImageQuery = isCursorInSelectedImageMention(prompt, cursorPosition)
     ? null
@@ -1993,7 +1998,7 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning || Boolean(maskDisabledReason)) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={showSubmitTooltip} text={submitTooltipText} />
                   <button
                     onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
                     disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
@@ -2036,7 +2041,7 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig || batchRunning || Boolean(maskDisabledReason)) && submitHover} text={submitTooltipText} />
+                  <ButtonTooltip visible={showSubmitTooltip} text={submitTooltipText} />
                   <button
                     onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
                     disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}

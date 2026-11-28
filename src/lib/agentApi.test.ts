@@ -57,6 +57,18 @@ describe('callBatchImageSingle', () => {
     expect(result.image).not.toBeNull()
   })
 
+  it('attaches the batch item mask to the image generation tool', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ output: [] })))
+    await callBatchImageSingle({
+      profile: createDefaultOpenAIProfile({ apiKey: 'test-key', apiMode: 'responses' }),
+      params: DEFAULT_PARAMS, batchItemId: 'masked', prompt: 'edit', referenceImageDataUrls: ['data:image/png;base64,target'],
+      maskDataUrl: 'data:image/png;base64,mask',
+    })
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
+    expect(body.tools[0].input_image_mask.image_url).toBe('data:image/png;base64,mask')
+    expect(body.input[0].content[1].image_url).toBe('data:image/png;base64,target')
+  })
+
   it('reports the image tool error without a misleading streaming hint', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       error: { message: "Tool choice 'required' must be specified with 'tools' parameter." },
