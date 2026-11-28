@@ -1068,11 +1068,7 @@ export default function SettingsModal() {
           onClickCapture={(e) => {
             blockDataTransferClick(e)
             if (e.defaultPrevented || !(e.target instanceof Element)) return
-            if (e.target.closest('input, textarea, select, button, a, label[for], [contenteditable="true"], [role="button"]')) return
-            const control = e.target.closest('label')?.control
-            if (control instanceof HTMLTextAreaElement || (control instanceof HTMLInputElement && !['checkbox', 'radio'].includes(control.type))) {
-              e.preventDefault()
-            }
+            if (e.target.closest('input, textarea, select, button, a, [contenteditable="true"], [role="button"]')) return
             if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) {
               document.activeElement.blur()
             }
@@ -1435,9 +1431,10 @@ export default function SettingsModal() {
                 </div>
 
               {/* 1. 配置名称 */}
-              <label className="block">
+              <div className="block">
                 <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">配置名称</span>
                 <input
+                  aria-label="配置名称"
                   value={activeProfile.name}
                   onChange={(e) => updateActiveProfile({ name: e.target.value })}
                   onBlur={(e) => commitActiveProfilePatch({ name: e.target.value })}
@@ -1445,7 +1442,7 @@ export default function SettingsModal() {
                   disabled={activeProfileLocked}
                   className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
                 />
-              </label>
+              </div>
 
               {/* 2. 服务商类型 */}
               <div className="block">
@@ -1462,11 +1459,12 @@ export default function SettingsModal() {
 
               {/* 3. API URL */}
               {activeProviderUsesApiUrl && (
-                <label className="block">
+                <div className="block">
                   <div className="mb-1.5 flex items-center justify-between">
                     <span className="block text-sm text-gray-600 dark:text-gray-300">API URL</span>
                   </div>
                   <input
+                    aria-label="API URL"
                     value={activeProfile.baseUrl}
                     onChange={(e) => updateActiveProfile({ baseUrl: e.target.value })}
                     onBlur={(e) => commitActiveProfilePatch({ baseUrl: e.target.value })}
@@ -1486,7 +1484,7 @@ export default function SettingsModal() {
                       <span>末尾带 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">/</code> 时直接使用该地址拼接接口，不补 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">/v1</code> 前缀；支持通过链接参数导入：<code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">?apiUrl=</code>。</span>
                     )}
                   </div>
-                </label>
+                </div>
               )}
 
               {/* 4. API 代理（紧跟 URL） */}
@@ -1578,7 +1576,7 @@ export default function SettingsModal() {
               {/* 7. 模型 ID（紧跟接口选择） */}
               <div className="block">
                 <div className="mb-1.5 flex items-center justify-between gap-3 text-sm text-gray-600 dark:text-gray-300">
-                  <label htmlFor="settings-model-id">{isResponsesProfile ? '文本模型 ID' : '模型 ID'}</label>
+                  <span>{isResponsesProfile ? '文本模型 ID' : '模型 ID'}</span>
                   {(BUILT_IN_PROVIDER_IDS.has(activeProfile.provider) || activeCustomProvider?.modelList) && (
                     <button type="button" disabled={activeProfileLocked} onClick={(event) => {
                       event.currentTarget.focus()
@@ -1588,7 +1586,6 @@ export default function SettingsModal() {
                   )}
                 </div>
                 <ModelIdInput
-                  id="settings-model-id"
                   key={`${activeProfile.id}-model`}
                   aria-label={isResponsesProfile ? '文本模型 ID' : '模型 ID'}
                   value={activeProfile.model}
@@ -1643,7 +1640,7 @@ export default function SettingsModal() {
               )}
 
               {isResponsesProfile && (
-                <label className="block">
+                <div className="block">
                   <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">图像模型 ID</span>
                   <input
                     aria-label="图像模型 ID"
@@ -1658,12 +1655,12 @@ export default function SettingsModal() {
                   <div data-selectable-text className="mt-1.5 text-xs leading-6 text-gray-500 dark:text-gray-500">
                     <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">image_generation</code> 工具实际出图的 GPT Image 模型，复杂度和输出格式由此模型决定。留空使用接口默认模型，例如 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_IMAGES_MODEL}</code>。支持通过链接参数导入：<code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">?imageGenerationModel=</code>。
                   </div>
-                </label>
+                </div>
               )}
 
               {showSvgModel && (
                 <div className="space-y-3">
-                  <label className="block">
+                  <div className="block">
                     <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">SVG 编写模型 ID</span>
                     <input
                       aria-label="SVG 编写模型 ID"
@@ -1682,7 +1679,7 @@ export default function SettingsModal() {
                           ? '留空时不指定 SVG 编写模型，由接口使用 Responses 模型或默认编写模型。'
                           : <>留空时使用 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_SVG_MODEL}</code>。</>}</>}
                     </div>
-                  </label>
+                  </div>
                   {activeProfile.provider !== 'fal' && (
                     <div className="block">
                       <div className="mb-1.5 flex items-center justify-between gap-3">
@@ -1827,9 +1824,10 @@ export default function SettingsModal() {
 
               {/* 12. 请求超时 */}
               {(activeProviderIsOpenAICompatible || nativeImageProvider) && (
-                <label className="block">
+                <div className="block">
                   <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">请求超时 (秒)</span>
                   <input
+                    aria-label="请求超时 (秒)"
                     value={timeoutInput}
                     onChange={(e) => setTimeoutInput(e.target.value)}
                     onBlur={commitTimeout}
@@ -1839,7 +1837,7 @@ export default function SettingsModal() {
                     max={600}
                     className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
                   />
-                </label>
+                </div>
               )}
             </div>
             )}

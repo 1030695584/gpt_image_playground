@@ -92,6 +92,7 @@ function ConcurrencyInput({ value, disabled, onCommit }: { value: number; disabl
   return (
     <>
       <input
+        aria-label="并发数"
         value={input}
         onChange={(e) => setInput(e.target.value)}
         onFocus={() => setFocused(true)}
@@ -118,7 +119,8 @@ function ConcurrencyInput({ value, disabled, onCommit }: { value: number; disabl
 }
 
 /** GIF 帧参数输入框：超出范围时取边界值，清空或无效时保留原值 */
-function GifParamInput({ value, range, onCommit }: {
+function GifParamInput({ label, value, range, onCommit }: {
+  label: string
   value: number
   range: { min: number; max: number }
   onCommit: (value: number) => void
@@ -142,6 +144,7 @@ function GifParamInput({ value, range, onCommit }: {
 
   return (
     <input
+      aria-label={label}
       value={input}
       onChange={(e) => setInput(e.target.value)}
       onBlur={() => {
@@ -683,22 +686,24 @@ export default function InputParamsPanel({
               </div>
               {isGif && (
                 <>
-                  <label className={ROW_CLASS}>
+                  <div className={ROW_CLASS}>
                     <span className={ROW_LABEL_CLASS}>帧数</span>
                     <GifParamInput
+                      label="帧数"
                       value={params.frame_count}
                       range={GIF_FRAME_COUNT_RANGE}
                       onCommit={(frame_count) => setParams({ frame_count })}
                     />
-                  </label>
-                  <label className={ROW_CLASS}>
+                  </div>
+                  <div className={ROW_CLASS}>
                     <span className={ROW_LABEL_CLASS}>每帧时长（ms）</span>
                     <GifParamInput
+                      label="每帧时长（ms）"
                       value={params.frame_duration_ms}
                       range={GIF_FRAME_DURATION_RANGE}
                       onCommit={(frame_duration_ms) => setParams({ frame_duration_ms })}
                     />
-                  </label>
+                  </div>
                 </>
               )}
               {transparentOutputAvailable && (
@@ -711,7 +716,7 @@ export default function InputParamsPanel({
                 </div>
               )}
               {!showTransparentOutputControl && (
-                <label
+                <div
                   className={ROW_CLASS}
                   onMouseEnter={compressionHint.show}
                   onMouseLeave={compressionHint.hide}
@@ -722,6 +727,7 @@ export default function InputParamsPanel({
                 >
                   <span className={ROW_LABEL_CLASS}>压缩率</span>
                   <input
+                    aria-label="压缩率"
                     value={outputCompressionInput}
                     onChange={(e) => setOutputCompressionInput(e.target.value)}
                     onBlur={commitOutputCompression}
@@ -740,7 +746,7 @@ export default function InputParamsPanel({
                     visible={compressionHint.visible}
                     text={parameterControls.output_compression.disabledReason}
                   />
-                </label>
+                </div>
               )}
               <div
                 className={ROW_CLASS}
@@ -815,14 +821,14 @@ export default function InputParamsPanel({
                 </div>
               )}
               {batchMode === 'concurrent' && batchConcurrencyLimited && (
-                <label className={ROW_CLASS}>
+                <div className={ROW_CLASS}>
                   <span className={ROW_LABEL_CLASS}>并发数</span>
                   <ConcurrencyInput
                     value={batchConcurrency}
                     disabled={Boolean(batchProgress)}
                     onCommit={(value) => onBatchChange({ batchPromptConcurrency: value })}
                   />
-                </label>
+                </div>
               )}
               {batchMode === 'concurrent' && !batchConcurrencyLimited && (
                 <p className="rounded-lg bg-amber-500/[0.1] px-2.5 py-2 text-[11px] leading-relaxed text-amber-700 dark:bg-amber-500/[0.14] dark:text-amber-400/90">

@@ -120,15 +120,14 @@ export default function CustomProviderModal({
           </div>
 
           <div className="flex-1 flex flex-col min-h-0">
-            <label className="flex-1 flex flex-col min-h-0">
-              <span className="mb-1 shrink-0 block text-xs text-gray-500 dark:text-gray-400">手动编辑 (仅接口映射 Manifest)</span>
-              <textarea
-                value={json}
-                onChange={(e) => onJsonChange(e.target.value)}
-                spellCheck={false}
-                className="flex-1 min-h-[150px] w-full resize-none rounded-xl border border-transparent bg-black/[0.04] px-3 py-2 font-mono text-xs leading-relaxed text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50 custom-scrollbar ios-rounded-scroll-fix"
-              />
-            </label>
+            <span className="mb-1 shrink-0 block text-xs text-gray-500 dark:text-gray-400">手动编辑 (仅接口映射 Manifest)</span>
+            <textarea
+              aria-label="手动编辑 (仅接口映射 Manifest)"
+              value={json}
+              onChange={(e) => onJsonChange(e.target.value)}
+              spellCheck={false}
+              className="flex-1 min-h-[150px] w-full resize-none rounded-xl border border-transparent bg-black/[0.04] px-3 py-2 font-mono text-xs leading-relaxed text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50 custom-scrollbar ios-rounded-scroll-fix"
+            />
           </div>
 
           {error && (
