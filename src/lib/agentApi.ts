@@ -741,6 +741,7 @@ export async function callBatchImageSingle(opts: {
   prompt: string
   referenceImageDataUrls: string[]
   referenceIds?: string[]
+  maskDataUrl?: string
   allowPromptRewrite?: boolean
   signal?: AbortSignal
   onImageToolStarted?: () => void | Promise<void>
@@ -780,25 +781,8 @@ export async function callBatchImageSingle(opts: {
       input = guardedPrompt
     }
 
-    const tool: Record<string, unknown> = {
-      type: 'image_generation',
-      action: referenceImageDataUrls.length > 0 ? 'auto' : 'generate',
-      output_format: params.output_format,
-    }
-    const imageModel = getImageGenerationModel(profile)
-    if (imageModel) tool.model = imageModel
-    if (!profile.codexCli) {
-      tool.size = params.size
-      tool.quality = params.quality
-      tool.moderation = params.moderation
-    }
-    applyGptImage26Params(tool, params, profile)
-    if (params.output_format !== 'png' && params.output_compression != null) {
-      tool.output_compression = params.output_compression
-    }
-    if (profile.streamImages) {
-      tool.partial_images = profile.streamPartialImages ?? DEFAULT_STREAM_PARTIAL_IMAGES
-    }
+    const tool = createImageTool(params, profile, opts.maskDataUrl)
+    if (referenceImageDataUrls.length === 0) tool.action = 'generate'
 
     const body: Record<string, unknown> = {
       model: profile.model,

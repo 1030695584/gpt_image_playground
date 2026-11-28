@@ -20,35 +20,36 @@ export function getAgentRemovedReferenceTag(referenceId: string) {
   return `<removed_ref id="${referenceId}" />`
 }
 
-export function collectAgentRoundOutputImageSlots(round: AgentRound, tasks: TaskRecord[]) {
-  const slots: Array<string | null> = []
-  for (const taskId of round.outputTaskIds) {
-    const task = tasks.find((item) => item.id === taskId)
-    if (!task) {
-      slots.push(null)
-      continue
-    }
-    slots.push(...task.outputImages)
+export function setAgentRoundOutputTaskIds(round: AgentRound, ids: string[]): AgentRound {
+  const keep = new Set(ids)
+  const prompts = Object.entries(round.outputTaskPrompts ?? {}).filter(([id]) => keep.has(id))
+  const widths = Object.entries(round.deletedOutputTaskWidths ?? {}).filter(([id]) => keep.has(id))
+  return {
+    ...round,
+    outputTaskIds: ids,
+    ...(round.outputTaskPrompts ? { outputTaskPrompts: prompts.length ? Object.fromEntries(prompts) : undefined } : {}),
+    ...(round.deletedOutputTaskWidths ? { deletedOutputTaskWidths: widths.length ? Object.fromEntries(widths) : undefined } : {}),
   }
-  return slots
+}
+
+export function getAgentTaskImageSlots(task: TaskRecord | undefined, missingWidth = 1): Array<string | null> {
+  if (!task) return Array(Number.isSafeInteger(missingWidth) && missingWidth >= 0 ? missingWidth : 1).fill(null)
+  if (!Array.isArray(task.removedOutputImageIndices)) return task.outputImages
+  const width = task.outputImages.length + task.removedOutputImageIndices.length
+  const removed = new Set(task.removedOutputImageIndices)
+  if (removed.size !== task.removedOutputImageIndices.length ||
+    task.removedOutputImageIndices.some((index) => !Number.isSafeInteger(index) || index < 0 || index >= width)) return task.outputImages
+  let liveIndex = 0
+  return Array.from({ length: width }, (_, index) =>
+    removed.has(index) ? null : task.outputImages[liveIndex++] ?? null)
+}
+
+export function collectAgentRoundOutputImageSlots(round: AgentRound, tasks: TaskRecord[]) {
+  return round.outputTaskIds.flatMap((id) => getAgentTaskImageSlots(tasks.find((task) => task.id === id), round.deletedOutputTaskWidths?.[id]))
 }
 
 export function extractAgentReferenceIds(text: string) {
   return Array.from(text.matchAll(AGENT_REF_TAG_RE), (match) => match[2]).filter((id): id is string => Boolean(id))
-}
-
-export function resolveAgentPromptImageReferences(prompt: string, rounds: AgentRound[], tasks: TaskRecord[]) {
-  const refs: string[] = []
-  for (const match of prompt.matchAll(AGENT_ROUND_IMAGE_REFERENCE_RE)) {
-    const roundIndex = Number(match[1]) - 1
-    const imageIndex = Number(match[2]) - 1
-    const round = rounds[roundIndex]
-    if (!round || imageIndex < 0) continue
-
-    const imageId = collectAgentRoundOutputImageSlots(round, tasks)[imageIndex]
-    if (imageId) refs.push(imageId)
-  }
-  return refs
 }
 
 export function replaceAgentPromptImageReferencesForApi(

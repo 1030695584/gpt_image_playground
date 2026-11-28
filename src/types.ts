@@ -71,6 +71,13 @@ export type CustomProviderImageSize = { mode: 'pixels' } | {
 export interface CustomProviderDefinition {
   id: string
   name: string
+  modelList?: {
+    path: string
+    listPath?: string
+    idPath?: string
+    nextCursorPath?: string
+    cursorParam?: string
+  }
   template?: CustomProviderTemplate
   imageSize?: CustomProviderImageSize
   submit: CustomProviderSubmitMapping
@@ -375,6 +382,8 @@ export interface TaskRecord {
   markupImageId?: string | null
   /** 输出图片的 image store id 列表 */
   outputImages: string[]
+  /** 已删除图片在原始成功输出中的下标，保留历史会话图号 */
+  removedOutputImageIndices?: number[]
   /** 并发多图中失败的输出槽位，requestIndex 为从 0 开始的请求序号 */
   outputErrors?: Array<{ requestIndex: number; error: string }>
   /** 流式生成的中间步骤图片 id 列表，仅失败时保留供排查/下载 */
@@ -448,12 +457,18 @@ export interface AgentRound {
   index: number
   parentRoundId?: string | null
   userMessageId: string
+  /** 同一条用户输入的多个回复共享此标识，默认使用 userMessageId */
+  userBranchId?: string
   assistantMessageId?: string
   prompt: string
   inputImageIds: string[]
   maskTargetImageId?: string | null
   maskImageId?: string | null
   outputTaskIds: string[]
+  /** 共用任务在本轮历史中的提示词，图像引用按当前分支编号 */
+  outputTaskPrompts?: Record<string, string>
+  /** 已删除任务在本轮历史中占用的图号数量 */
+  deletedOutputTaskWidths?: Record<string, number>
   responseId?: string
   responseOutput?: ResponsesOutputItem[]
   status: AgentRoundStatus
@@ -466,6 +481,7 @@ export interface AgentConversation {
   id: string
   title: string
   activeRoundId?: string | null
+  visitedRoundIds?: string[]
   createdAt: number
   updatedAt: number
   rounds: AgentRound[]

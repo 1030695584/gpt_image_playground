@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { Fragment, useEffect, useMemo, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { AgentMessage, AgentRound, TaskRecord } from '../types'
-import { editOutputs, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, reuseConfig, useStore } from '../store'
-import { getActiveAgentRounds, getAgentBranchLeafId, getAgentRoundPath, getConversationSearchText, getAgentRoundTaskIds, getAgentSiblingRounds } from '../lib/agentConversationState'
+import { editAgentRoundMessage, editOutputs, retryAgentMessage, removeTask, reuseConfig, useStore } from '../store'
+import { getActiveAgentRounds, getAgentAssistantMessage, getAgentBranchLeafId, getAgentRoundPath, getConversationSearchText, getAgentConversationTaskIds, getAgentSiblingRounds } from '../lib/agentConversationState'
 import { ensureImageCached, getCachedImage } from '../lib/imageCache'
 import { getImageComments, getPromptMentionParts } from '../lib/promptImageMentions'
 import { replaceAgentPromptImageReferencesForApi } from '../lib/agentImageReferences'
@@ -129,10 +129,6 @@ export default function AgentWorkspace() {
   const tasks = useStore((s) => s.tasks)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
-  const setPrompt = useStore((s) => s.setPrompt)
-  const setInputImages = useStore((s) => s.setInputImages)
-  const setMaskDraft = useStore((s) => s.setMaskDraft)
-  const clearMaskDraft = useStore((s) => s.clearMaskDraft)
   const setAppMode = useStore((s) => s.setAppMode)
   const agentScrollToBottomAfterSubmit = useStore((s) => s.settings.agentScrollToBottomAfterSubmit)
   const agentEditingRoundId = useStore((s) => s.agentEditingRoundId)
@@ -149,8 +145,8 @@ export default function AgentWorkspace() {
 
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const bottomSentinelRef = useRef<HTMLDivElement>(null)
-  const messageRefs = useRef(new Map<string, HTMLElement>())
-  const [scrollTargetRoundId, setScrollTargetRoundId] = useState<string | null>(null)
+  const branchControls = useRef(new Map<string, HTMLElement>())
+  const [scrollTarget, setScrollTarget] = useState<string | null>(null)
   const [pullDownOffset, setPullDownOffset] = useState(0)
   const [mobileTopBarVisible, setMobileTopBarVisible] = useState(true)
   const [conversationSearchQuery, setConversationSearchQuery] = useState('')
@@ -356,9 +352,7 @@ export default function AgentWorkspace() {
     for (const round of activeRounds) {
       const userMessage = conversation.messages.find((message) => message.id === round.userMessageId)
       if (userMessage) messages.push(userMessage)
-      const assistantMessage = round.assistantMessageId
-        ? conversation.messages.find((message) => message.id === round.assistantMessageId)
-        : conversation.messages.find((message) => message.roundId === round.id && message.role === 'assistant')
+      const assistantMessage = getAgentAssistantMessage(conversation, round)
       if (assistantMessage) messages.push(assistantMessage)
     }
     return messages
@@ -393,36 +387,46 @@ export default function AgentWorkspace() {
   }, [activeMessages, activeRounds, updateIsScrolledToBottom])
 
   useEffect(() => {
-    if (!scrollTargetRoundId) return
+    if (!scrollTarget) return
     const id = window.requestAnimationFrame(() => {
-      messageRefs.current.get(scrollTargetRoundId)?.scrollIntoView({ block: 'center' })
-      setScrollTargetRoundId(null)
+      branchControls.current.get(scrollTarget)?.scrollIntoView({ block: 'center' })
+      setScrollTarget(null)
     })
     return () => window.cancelAnimationFrame(id)
-  }, [activeMessages, scrollTargetRoundId])
+  }, [activeMessages, scrollTarget])
 
-  const handleSwitchBranch = (round: AgentRound, direction: -1 | 1) => {
-    if (!conversation) return
-    const siblings = getAgentSiblingRounds(conversation, round)
-    if (siblings.length <= 1) return
-    const currentIndex = siblings.findIndex((item) => item.id === round.id)
-    const nextRound = siblings[(currentIndex + direction + siblings.length) % siblings.length]
-    const nextLeafId = getAgentBranchLeafId(conversation, nextRound.id)
-    setActiveAgentRoundId(conversation.id, nextLeafId)
-    setAgentEditingRoundId(null)
-    setScrollTargetRoundId(nextRound.id)
+  const renderBranchControls = (round: AgentRound, role: AgentMessage['role'], siblings: AgentRound[]) => {
+    if (!conversation || siblings.length < 2) return null
+    const index = siblings.findIndex((item) => item.id === round.id)
+    const switchBranch = (direction: -1 | 1) => {
+      const next = siblings[(index + direction + siblings.length) % siblings.length]
+      setActiveAgentRoundId(conversation.id, getAgentBranchLeafId(conversation, next.id))
+      setScrollTarget(`${role}:${next.id}`)
+    }
+    const key = `${role}:${round.id}`
+    const buttonClass = 'p-1 rounded-md hover:bg-gray-200/50 dark:hover:bg-white/10 hover:text-gray-800 dark:hover:text-gray-200 transition-colors'
+    return (
+      <div
+        ref={(node) => {
+          if (node) branchControls.current.set(key, node)
+          else branchControls.current.delete(key)
+        }}
+        className="inline-flex items-center text-sm font-bold text-gray-400 dark:text-gray-500 mr-1"
+      >
+        <AgentActionButton tooltip="上一分支" className={buttonClass} onClick={() => switchBranch(-1)}>
+          <ChevronLeftIcon className="w-4 h-4" />
+        </AgentActionButton>
+        <span className="px-1 tabular-nums tracking-widest">{index + 1}/{siblings.length}</span>
+        <AgentActionButton tooltip="下一分支" className={buttonClass} onClick={() => switchBranch(1)}>
+          <ChevronRightIcon className="w-4 h-4" />
+        </AgentActionButton>
+      </div>
+    )
   }
 
   const handleDeleteConversation = (id: string) => {
     const targetConversation = conversations.find((item) => item.id === id) ?? null
-    const roundIds = new Set(targetConversation?.rounds.map((round) => round.id) ?? [])
-    const roundTaskIds = targetConversation?.rounds.flatMap((round) => round.outputTaskIds) ?? []
-    const relatedTasks = tasks.filter((task) =>
-      task.agentConversationId === id || Boolean(task.agentRoundId && roundIds.has(task.agentRoundId)),
-    )
-    const existingTaskIds = new Set(tasks.map((task) => task.id))
-    const relatedTaskIds = Array.from(new Set([...roundTaskIds, ...relatedTasks.map((task) => task.id)]))
-      .filter((taskId) => existingTaskIds.has(taskId))
+    const relatedTaskIds = getAgentConversationTaskIds(targetConversation, tasks, useStore.getState().agentConversations)
     const relatedTaskIdSet = new Set(relatedTaskIds)
     const generatedImageCount = new Set(
       tasks
@@ -439,9 +443,9 @@ export default function AgentWorkspace() {
             tone: 'danger',
           }
         : undefined,
+      awaitAction: true,
       action: async (deleteGeneratedImages = false) => {
-        deleteConversation(id)
-        if (deleteGeneratedImages && relatedTaskIds.length > 0) await removeMultipleTasks(relatedTaskIds)
+        await deleteConversation(id, deleteGeneratedImages)
       },
     })
   }
@@ -522,7 +526,7 @@ export default function AgentWorkspace() {
     setConfirmDialog({
       title: isUserMessage ? '删除轮次' : '删除消息',
       message: isUserMessage
-        ? '确定要删除这轮任务吗？这会删除这条消息和它的输出，后续消息会被保留。'
+        ? '确定要删除这条用户消息及其所有回复和生成的图片吗？后续消息会被保留。'
         : '确定要删除这条消息吗？这会同时删除这条回复生成的图片。',
       awaitAction: true,
       action: async () => {
@@ -532,7 +536,7 @@ export default function AgentWorkspace() {
             ? await deleteAgentRound(conversationId, round.id)
             : await deleteAgentAssistantMessage(conversationId, message.id)
           if (result === 'running') {
-            showToast('该轮次仍在生成，请先停止生成后再删除', 'info')
+            showToast('相关轮次仍在生成，请等待完成或先停止生成', 'info')
             return true
           }
           if (result === 'not-found') {
@@ -565,31 +569,6 @@ export default function AgentWorkspace() {
         void reuseConfig(task)
       },
     })
-  }
-
-  const handleEditRoundMessage = async (round: AgentRound, content: string) => {
-    setAgentEditingRoundId(round.id)
-    clearMaskDraft()
-
-    const inputImages = await Promise.all(
-      round.inputImageIds.map(async (id) => ({
-        id,
-        dataUrl: await ensureImageCached(id) || '',
-      })),
-    )
-    setInputImages(inputImages)
-    const maskTargetImageId = round.maskTargetImageId ?? (round.maskImageId ? round.inputImageIds[0] : null)
-    if (maskTargetImageId && round.maskImageId && inputImages.some((img) => img.id === maskTargetImageId)) {
-      const maskDataUrl = await ensureImageCached(round.maskImageId)
-      if (maskDataUrl) {
-        setMaskDraft({
-          targetImageId: maskTargetImageId,
-          maskDataUrl,
-          updatedAt: Date.now(),
-        })
-      }
-    }
-    setPrompt(content)
   }
 
   const handleCopyMessage = async (content: string, successMessage = '提示词已复制', failureMessage = '复制提示词失败') => {
@@ -787,13 +766,12 @@ export default function AgentWorkspace() {
                 )
               }
 
-              const renderedMessages = activeMessages.map((message) => {
+              return activeMessages.map((message, index) => {
                 const round = conversation.rounds.find((item) => item.id === message.roundId)
                 const isAssistant = message.role === 'assistant'
                 const isStreamingAssistant = isAssistant && round?.status === 'running'
                 const isEditing = !isAssistant && round?.id === agentEditingRoundId
-                const siblingRounds = !isAssistant && round ? getAgentSiblingRounds(conversation, round) : []
-                const siblingIndex = round ? siblingRounds.findIndex((item) => item.id === round.id) : -1
+                const siblingRounds = round ? getAgentSiblingRounds(conversation, round, message.role) : []
                 const hasBranches = siblingRounds.length > 1
                 const taskSlotsForRound = isAssistant ? getRoundTaskSlots(round ?? null, tasks) : []
                 const tasksForRound = taskSlotsForRound.map((slot) => slot.task).filter(Boolean) as TaskRecord[]
@@ -804,13 +782,9 @@ export default function AgentWorkspace() {
                 const assistantBlocks = isAssistant ? getAgentAssistantBlocks(round ?? null, taskSlotsForRound, tasks, Boolean(message.content.trim())) : []
                 const inputImagesForRound = (round?.inputImageIds || []).map(id => ({ id, dataUrl: '' }))
                 const parts = getPromptMentionParts(message.content, inputImagesForRound)
-                return (
+                const card = (
                   <div key={message.id} className={`flex w-full mb-6 ${isAssistant ? 'justify-start' : 'justify-end'}`}>
                     <div
-                      ref={(node) => {
-                        if (!isAssistant && node) messageRefs.current.set(message.roundId, node)
-                        else if (!isAssistant) messageRefs.current.delete(message.roundId)
-                      }}
                       className={`group flex max-w-[95%] flex-col md:max-w-[85%] lg:max-w-[75%] ${isAssistant ? 'items-start' : 'items-end'}`}
                     >
                       <article 
@@ -920,7 +894,7 @@ export default function AgentWorkspace() {
 
                       </article>
 
-                    {!isStreamingAssistant && <div className={`mt-2 flex w-full min-w-fit items-center justify-between gap-3 px-1 transition-opacity duration-200 ${isEditing || hasBranches ? 'opacity-100' : 'opacity-100 lg:opacity-0 lg:group-hover:opacity-100'}`} onClick={e => e.stopPropagation()}>
+                    {(!isStreamingAssistant || hasBranches) && <div className={`mt-2 flex w-full min-w-fit items-center justify-between gap-3 px-1 transition-opacity duration-200 ${isEditing || hasBranches ? 'opacity-100' : 'opacity-100 lg:opacity-0 lg:group-hover:opacity-100'}`} onClick={(e) => e.stopPropagation()}>
                       <div className="flex min-w-0 items-center gap-2">
                         {isEditing && (
                           <div className="inline-flex items-center rounded-md bg-blue-100 px-2 py-1 text-xs text-blue-700 dark:bg-blue-500/20 dark:text-blue-300">
@@ -929,11 +903,8 @@ export default function AgentWorkspace() {
                               tooltip="取消编辑"
                               className="ml-1 -mr-1 p-0.5 rounded-full hover:bg-blue-200 dark:hover:bg-blue-500/40 transition-colors"
                               onClick={(e) => {
-                                e.stopPropagation();
-                                setPrompt('');
-                                setInputImages([]);
-                                clearMaskDraft();
-                                setAgentEditingRoundId(null);
+                                e.stopPropagation()
+                                setAgentEditingRoundId(null)
                               }}
                             >
                               <CloseIcon className="w-3 h-3" />
@@ -942,18 +913,8 @@ export default function AgentWorkspace() {
                         )}
                       </div>
                       <div className="flex items-center gap-2 ml-auto text-gray-400">
-                        {!isAssistant && round && hasBranches && siblingIndex >= 0 && (
-                          <div className="inline-flex items-center text-sm font-bold text-gray-400 dark:text-gray-500 mr-1">
-                            <AgentActionButton tooltip="上一分支" className="p-1 rounded-md hover:bg-gray-200/50 dark:hover:bg-white/10 hover:text-gray-800 dark:hover:text-gray-200 transition-colors" onClick={() => handleSwitchBranch(round, -1)}>
-                              <ChevronLeftIcon className="w-4 h-4" />
-                            </AgentActionButton>
-                            <span className="px-1 tabular-nums tracking-widest">{siblingIndex + 1}/{siblingRounds.length}</span>
-                            <AgentActionButton tooltip="下一分支" className="p-1 rounded-md hover:bg-gray-200/50 dark:hover:bg-white/10 hover:text-gray-800 dark:hover:text-gray-200 transition-colors" onClick={() => handleSwitchBranch(round, 1)}>
-                              <ChevronRightIcon className="w-4 h-4" />
-                            </AgentActionButton>
-                          </div>
-                        )}
-                        {isAssistant ? (
+                        {round && renderBranchControls(round, message.role, siblingRounds)}
+                        {isStreamingAssistant ? null : isAssistant ? (
                           <>
                             <AgentActionButton tooltip="复制输出文本" className={`p-1.5 rounded-md transition-colors ${message.content.trim() ? 'text-gray-400 hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-200 dark:hover:bg-white/[0.06]' : 'text-gray-300 dark:text-gray-600 opacity-50 cursor-not-allowed'}`} disabled={!message.content.trim()} onClick={() => {
                               void handleCopyMessage(getAgentAssistantCopyContent(message.content, assistantBlocks), '输出文本已复制', '复制输出文本失败');
@@ -961,7 +922,7 @@ export default function AgentWorkspace() {
                               <CopyIcon className="w-4 h-4" />
                             </AgentActionButton>
                             <AgentActionButton tooltip="重新生成" className="p-1.5 rounded-md text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors" onClick={() => {
-                              if (conversation && round) void regenerateAgentAssistantMessage(conversation.id, round.id);
+                              if (round) void retryAgentMessage(conversation.id, round.id, 'assistant')
                             }}>
                               <RefreshIcon className="w-4 h-4" />
                             </AgentActionButton>
@@ -1013,8 +974,13 @@ export default function AgentWorkspace() {
                             }}>
                               <CopyIcon className="w-4 h-4" />
                             </AgentActionButton>
+                            <AgentActionButton tooltip="重新发送" className="p-1.5 rounded-md hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors" onClick={() => {
+                              if (round) void retryAgentMessage(conversation.id, round.id, 'user')
+                            }}>
+                              <RefreshIcon className="w-4 h-4" />
+                            </AgentActionButton>
                             <AgentActionButton tooltip="编辑" className="p-1.5 rounded-md hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-200/50 dark:hover:bg-white/[0.04] transition-colors" onClick={() => {
-                               if (round) void handleEditRoundMessage(round, message.content);
+                              if (round) void editAgentRoundMessage(conversation.id, round, message.content)
                             }}>
                               <EditIcon className="w-4 h-4" />
                             </AgentActionButton>
@@ -1028,39 +994,41 @@ export default function AgentWorkspace() {
                       </div>
                     </div>}
                     </div>
-                </div>
+                  </div>
                 )
-              })
+                if (!round || isAssistant || activeMessages[index + 1]?.roundId === round.id) return card
 
-              const runningRounds = activeRounds.filter((round) =>
-                round.status === 'running' &&
-                !conversation.messages.some((message) => message.roundId === round.id && message.role === 'assistant'),
-              )
-
-              return (
-                <>
-                  {renderedMessages}
-                  {runningRounds.map((round) => (
-                    <div key={`running-${round.id}`} className="flex w-full justify-start mb-6">
-                      <article className="flex min-w-[16rem] max-w-[95%] flex-col rounded-2xl rounded-tl-sm border border-transparent bg-black/[0.04] p-4 dark:bg-white/[0.06] md:max-w-[85%] lg:max-w-[75%]">
-                        <div className="mb-2 text-sm text-gray-500 dark:text-gray-400">
-                          <span className="text-blue-600 dark:text-blue-400 font-semibold">Agent</span> <span className="ml-1 font-normal opacity-60">· 第 {round.index} 轮</span>
-                        </div>
-                        <div className="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400">
-                          <span className="inline-flex items-center gap-1.5">
-                            <span>正在生成回复</span>
+                const controls = renderBranchControls(round, 'assistant', getAgentSiblingRounds(conversation, round, 'assistant'))
+                if (round.status !== 'running' && !controls) return card
+                return (
+                  <Fragment key={message.id}>
+                    {card}
+                    {round.status === 'running' ? (
+                      <div className="mb-6 flex w-full flex-col items-start gap-2">
+                        <article className="flex min-w-[16rem] max-w-[95%] flex-col rounded-2xl rounded-tl-sm border border-transparent bg-black/[0.04] p-4 dark:bg-white/[0.06] md:max-w-[85%] lg:max-w-[75%]">
+                          <div className="mb-2 text-sm text-gray-500 dark:text-gray-400">
+                            <span className="text-blue-600 dark:text-blue-400 font-semibold">Agent</span> <span className="ml-1 font-normal opacity-60">· 第 {round.index} 轮</span>
+                          </div>
+                          <div className="inline-flex items-center gap-1.5 text-sm text-gray-500 dark:text-gray-400">
+                            正在生成回复
                             <span className="flex gap-1">
                               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
                               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current [animation-delay:150ms]" />
                               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current [animation-delay:300ms]" />
                             </span>
-                          </span>
-                        </div>
-                      </article>
-                    </div>
-                  ))}
-                </>
-              )
+                          </div>
+                        </article>
+                        {controls}
+                      </div>
+                    ) : (
+                      <div className="mb-6 flex items-center gap-2 px-1 text-sm text-gray-500">
+                        此分支暂无回复
+                        {controls}
+                      </div>
+                    )}
+                  </Fragment>
+                )
+              })
             })()
           )}
           <div ref={bottomSentinelRef} aria-hidden="true" />

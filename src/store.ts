@@ -51,7 +51,7 @@ import {
 import { callImageApi } from './lib/api'
 import { callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSingle, parseBatchImageCallArguments, type AgentApiResultImage } from './lib/agentApi'
 import { buildAgentApiInput, buildAgentContinuationInput } from './lib/agentInputBuilder'
-import { collectAgentRoundOutputImageSlots, extractAgentReferenceIds, getAgentCurrentReferenceId, getAgentGeneratedImageReferenceId } from './lib/agentImageReferences'
+import { collectAgentRoundOutputImageSlots, extractAgentReferenceIds, getAgentCurrentReferenceId, getAgentTaskImageSlots, setAgentRoundOutputTaskIds } from './lib/agentImageReferences'
 import { showBrowserNotification } from './lib/browserNotification'
 import { IMAGE_FETCH_CORS_HINT, isHttpUrl } from './lib/imageApiShared'
 import { getFalErrorMessage, getFalQueuedImageResult } from './lib/falAiImageApi'
@@ -73,9 +73,9 @@ import { hasActiveDataOperations, isCustomRecoverableTask, isFalRecoverableTask 
 import { formatExportFileTime } from './lib/exportFileName'
 import { buildExportZip, createExportBlob, getExportZipPlan, MAX_EXPORT_ZIP_BYTES, readExportZip, readExportZipFileAsDataUrl, readExportZipManifest } from './lib/exportZip'
 import { getExportImageSizes, readExportImages } from './lib/exportImages'
-import { deleteAgentRoundFromConversation, getActiveAgentRounds, getAgentRoundPath, isEmptyAgentConversation, normalizeAgentConversations, remapAgentRoundMentionsForPathChange, uniqueIds } from './lib/agentConversationState'
+import { deleteAgentRoundFromConversation, getAgentRoundDeletionTaskIds, getAgentRoundSubtreeIds, getAgentSharedTaskIds, getActiveAgentRounds, getAgentConversationTaskIds, getAgentBranchLeafId, getAgentSiblingRounds, getAgentAssistantMessage, getAgentInputHistory, getAgentRoundPath, isEmptyAgentConversation, normalizeAgentConversations, remapAgentRoundMentionsForPathChange, remapAgentTaskReferencesAfterDeletion, selectAgentBranch, uniqueIds } from './lib/agentConversationState'
 import { canonicalizeBatchFunctionCallArguments, countResponseToolCalls, createReadyAgentRecoveredToolState, getAgentFunctionOutputCallIds, getAgentRecoveredFailureError, getAgentRecoveredToolCallCount, getPersistableAgentConversations, getPersistableRawResponsePayload, mergeResponseOutputItems, scrubResponseOutputForDeletedAgentTasks, scrubTaskRawResponsePayloadForDeletedTasks } from './lib/agentResponseState'
-import { cleanStaleAgentInputDrafts, clearInputDraftState, isEmptyAgentInputDraft, normalizeAgentInputDrafts, remapAgentInputDraftMentionsForPathChange, restoreAgentInputDraftState, restoreGalleryInputDraftState, saveActiveAgentInputDrafts, saveGalleryInputDraft, syncActiveInputDraft, updateInputDraftImages } from './lib/inputDraftState'
+import { agentDraftKey, getAgentDraftOwner, isAgentEditComposerCurrent, removeConversationInputDrafts, cleanStaleAgentInputDrafts, clearInputDraftState, hydrateInputDraftImages, normalizeAgentInputDrafts, reconcileAgentDraftsAfterDeletion, restoreAgentDraftsAfterImport, restoreAgentInputDraftState, restoreGalleryInputDraftState, saveActiveAgentInputDrafts, saveGalleryInputDraft, syncActiveInputDraft, updateInputDraftImages } from './lib/inputDraftState'
 import { ALL_FAVORITES_COLLECTION_ID, DEFAULT_FAVORITE_COLLECTION_ID, createDefaultFavoriteCollection, deleteFavoriteCollectionState, ensureDefaultFavoriteCollection, getNewTaskFavoritePatch, getTaskFavoriteCollectionIds, mergeFavoriteCollections, normalizeFavoriteCollectionIds, normalizeFavoriteCollectionName, normalizeFavoriteCollections, normalizeFavoritePatch, normalizeLoadedFavoriteState, resolveDefaultFavoriteCollectionId, sameFavoriteCollectionIds } from './lib/favoriteState'
 import { createPersistedState, mergePersistedAgentConversations, migratePersistedState, normalizePersistedState } from './lib/persistedState'
 import { createTaskDonePatch, createTaskErrorPatch, deriveAgentImageActualParams, deriveGalleryActualParams, firstActualParams, getTaskOutputSlots, mapActualParamsByImage, mapRevisedPromptsByImage, markInterruptedOpenAIRunningTasks, normalizeTaskImageMetadata } from './lib/taskState'
@@ -98,6 +98,7 @@ const taskExecutions = new Map<string, symbol>()
 const taskRequestControllers = new Map<string, AbortController>()
 const agentRoundControllers = new Map<string, AbortController>()
 const agentRecoveryContinuations = new Set<string>()
+const queuedAgentRecoveries = new Map<string, Set<string>>()
 const deletedActiveAgentTasks = new Map<string, { task: TaskRecord; controller: AbortController }>()
 let agentConversationPersistenceReady = false
 let agentConversationMigrationPending = false
@@ -380,7 +381,7 @@ interface AppState {
   setActiveAgentConversationId: (id: string | null) => void
   setActiveAgentRoundId: (conversationId: string, roundId: string | null) => void
   renameAgentConversation: (id: string, title: string) => void
-  deleteAgentConversation: (id: string) => void
+  deleteAgentConversation: (id: string, deleteRelatedTasks?: boolean) => Promise<void>
   deleteAgentRound: (conversationId: string, roundId: string) => Promise<AgentDeletionResult>
   deleteAgentAssistantMessage: (conversationId: string, messageId: string) => Promise<AgentDeletionResult>
   setAgentSidebarCollapsed: (collapsed: boolean) => void
@@ -548,6 +549,7 @@ export const useStore = create<AppState>()(
       // Mode
       appMode: 'gallery',
       setAppMode: (appMode) => {
+        if (appMode === 'agent' && get().appMode === 'agent') return
         if (appMode === 'gallery') {
           const state = get()
           const agentInputDrafts = saveActiveAgentInputDrafts(state)
@@ -871,7 +873,7 @@ export const useStore = create<AppState>()(
       createAgentConversation: () => {
         const now = Date.now()
         const latestConversation = getLatestAgentConversation(get().agentConversations)
-        if (latestConversation && isEmptyAgentConversation(latestConversation)) {
+        if (latestConversation && isEmptyAgentConversation(latestConversation) && !preparingAgentConversations.has(latestConversation.id)) {
           set((state) => {
             const agentInputDrafts = saveActiveAgentInputDrafts(state)
             return {
@@ -892,7 +894,9 @@ export const useStore = create<AppState>()(
 
         const conversation = createAgentConversation(now)
         set((state) => {
-          const agentInputDrafts = saveActiveAgentInputDrafts(state)
+          const agentInputDrafts = saveActiveAgentInputDrafts(!state.activeAgentConversationId && !state.agentConversations.length
+            ? { ...state, activeAgentConversationId: conversation.id, agentEditingRoundId: null }
+            : state)
           return {
             agentConversations: [
               ...state.agentConversations,
@@ -908,14 +912,6 @@ export const useStore = create<AppState>()(
         return conversation.id
       },
       setActiveAgentConversationId: (id) => set((state) => {
-        if (state.activeAgentConversationId === id) {
-          return {
-            activeAgentConversationId: id,
-            agentSidebarCollapsed: true,
-            agentAssetPanelCollapsed: true,
-            agentEditingRoundId: null,
-          }
-        }
         const agentInputDrafts = saveActiveAgentInputDrafts(state)
         return {
           activeAgentConversationId: id,
@@ -926,30 +922,84 @@ export const useStore = create<AppState>()(
           ...restoreAgentInputDraftState(agentInputDrafts, id),
         }
       }),
-      setActiveAgentRoundId: (conversationId, roundId) => set((state) => ({
-        agentConversations: state.agentConversations.map((conversation) =>
-          conversation.id === conversationId ? { ...conversation, activeRoundId: roundId, updatedAt: Date.now() } : conversation,
-        ),
-      })),
-      renameAgentConversation: (id, title) => set((state) => ({ agentConversations: state.agentConversations.map((c) => (c.id === id ? { ...c, title, updatedAt: Date.now() } : c)) })),
-      deleteAgentConversation: (id) => set((state) => {
-        const agentInputDrafts = { ...state.agentInputDrafts }
-        delete agentInputDrafts[id]
-        const activeDeleted = state.activeAgentConversationId === id
+      setActiveAgentRoundId: (conversationId, roundId) => set((state) => {
+        const conversation = state.agentConversations.find((item) => item.id === conversationId)
+        if (!conversation) return {}
+        const visible = state.appMode === 'agent' && state.activeAgentConversationId === conversationId
+        const drafts = { ...(visible ? saveActiveAgentInputDrafts(state) : state.agentInputDrafts) }
+        if (roundId !== conversation.activeRoundId) {
+          const from = agentDraftKey(conversationId, 'branch', conversation.activeRoundId ?? null)
+          const to = agentDraftKey(conversationId, 'branch', roundId)
+          if (drafts[conversationId]) drafts[from] = drafts[conversationId]
+          else delete drafts[from]
+          if (drafts[to]) drafts[conversationId] = drafts[to]
+          else delete drafts[conversationId]
+          delete drafts[to]
+        }
         return {
-          agentConversations: state.agentConversations.filter((c) => c.id !== id),
-          activeAgentConversationId: activeDeleted ? null : state.activeAgentConversationId,
-          agentInputDrafts,
-          ...(activeDeleted ? clearInputDraftState() : {}),
+          agentConversations: state.agentConversations.map((item) => item === conversation
+            ? { ...item, ...selectAgentBranch(item, roundId), updatedAt: Date.now() } : item),
+          agentInputDrafts: drafts,
+          ...(visible ? { agentEditingRoundId: null, ...restoreAgentInputDraftState(drafts, conversationId) } : {}),
         }
       }),
+      renameAgentConversation: (id, title) => set((state) => ({ agentConversations: state.agentConversations.map((c) => (c.id === id ? { ...c, title, updatedAt: Date.now() } : c)) })),
+      deleteAgentConversation: async (id, deleteRelatedTasks = false) => {
+        const state = get()
+        const conversation = state.agentConversations.find((item) => item.id === id)
+        if (!conversation) return
+        const taskIds = new Set(getAgentConversationTaskIds(conversation, state.tasks, state.agentConversations))
+        preparingAgentConversations.delete(id)
+        queuedAgentRecoveries.delete(id)
+        for (const round of conversation.rounds) {
+          agentRoundControllers.get(getAgentRoundControllerKey(id, round.id))?.abort()
+        }
+        stopAgentImageTasks(state.tasks.filter((task) => taskIds.has(task.id)))
+        set((latest) => {
+          const activeDeleted = latest.activeAgentConversationId === id
+          const privacy = latest.privacyMode
+          const snapshot = privacy?.inputSnapshot
+          return {
+            agentConversations: latest.agentConversations.filter((item) => item.id !== id),
+            agentInputDrafts: removeConversationInputDrafts(latest.agentInputDrafts, id),
+            ...(activeDeleted ? {
+              activeAgentConversationId: null,
+              agentEditingRoundId: null,
+              ...(latest.appMode === 'agent' ? clearInputDraftState() : {}),
+            } : {}),
+            ...(privacy && snapshot ? {
+              privacyMode: { ...privacy, inputSnapshot: {
+                ...snapshot,
+                agentInputDrafts: removeConversationInputDrafts(snapshot.agentInputDrafts, id),
+                ...(snapshot.activeAgentConversationId === id ? {
+                  activeAgentConversationId: null, agentEditingRoundId: null,
+                  ...(snapshot.appMode === 'agent' ? clearInputDraftState() : {}),
+                } : {}),
+              } },
+            } : {}),
+          }
+        })
+        if (deleteRelatedTasks) await removeMultipleTasks([...taskIds])
+      },
       deleteAgentRound: (conversationId, roundId) => deleteAgentRoundAndTasks(conversationId, roundId),
       deleteAgentAssistantMessage: (conversationId, messageId) => deleteAgentAssistantMessageAndTasks(conversationId, messageId),
       setAgentSidebarCollapsed: (agentSidebarCollapsed) => set({ agentSidebarCollapsed }),
       setAgentAssetTab: (agentAssetTab) => set({ agentAssetTab }),
       setAgentAssetPanelCollapsed: (agentAssetPanelCollapsed) => set({ agentAssetPanelCollapsed }),
       setAgentMobileHeaderVisible: (agentMobileHeaderVisible) => set({ agentMobileHeaderVisible }),
-      setAgentEditingRoundId: (agentEditingRoundId) => set({ agentEditingRoundId }),
+      setAgentEditingRoundId: (agentEditingRoundId) => set((state) => {
+        if (state.agentEditingRoundId === agentEditingRoundId) return {}
+        const id = state.activeAgentConversationId
+        if (!id || state.appMode !== 'agent') return { agentEditingRoundId }
+        const drafts = { ...state.agentInputDrafts }
+        const editKey = agentEditingRoundId ? agentDraftKey(id, 'edit', agentEditingRoundId) : null
+        for (const key of Object.keys(drafts)) {
+          const owner = getAgentDraftOwner(key)
+          if (owner.conversationId === id && owner.kind === 'edit' && key !== editKey) delete drafts[key]
+        }
+        if (editKey) delete drafts[id]
+        return { agentEditingRoundId, agentInputDrafts: drafts, ...restoreAgentInputDraftState(drafts, editKey ?? id) }
+      }),
       setAgentEditingConversationId: (agentEditingConversationId) => set({ agentEditingConversationId }),
 
       // Tasks
@@ -1128,6 +1178,7 @@ export const useStore = create<AppState>()(
         }
 
         const privacyMode = createPrivacyModeState(state, Date.now())
+        for (const id of preparingAgentConversations.keys()) privacyMode.hiddenConversationIds.add(id)
         // 继续批量会用旧提示词创建新的可见任务；已开始的任务继续执行
         if (state.batchProgress) endBatch(activeBatchId)
         dismissAllTooltips()
@@ -1511,7 +1562,7 @@ async function completeRecoveredFalTask(task: TaskRecord, result: Awaited<Return
 async function recoverFalTask(taskId: string) {
   const { settings, tasks } = useStore.getState()
   const task = tasks.find((item) => item.id === taskId)
-  if (!task || task.apiProvider !== 'fal' || !task.falRequestId || !task.falEndpoint || task.status === 'done') return
+  if (!task || !isFalRecoverableTask(task) || !task.falRequestId || !task.falEndpoint) return
 
   const profile = getFalRecoveryProfile(settings, task)
   if (!profile) {
@@ -1525,7 +1576,8 @@ async function recoverFalTask(taskId: string) {
     await completeRecoveredFalTask(task, result)
     return
   } catch (err) {
-    if (!useStore.getState().tasks.some((item) => item.id === taskId)) return
+    const latest = useStore.getState().tasks.find((item) => item.id === taskId)
+    if (!latest || !isFalRecoverableTask(latest)) return
     if (isNetworkRecoverableError(err)) {
       scheduleFalRecovery(taskId)
       return
@@ -1558,6 +1610,31 @@ export async function initStore() {
   let loadedAgentConversations = mergePersistedAgentConversations(storedAgentConversations, legacyAgentConversations)
   const currentAgentConversations = normalizeAgentConversations(useStore.getState().agentConversations)
   loadedAgentConversations = mergePersistedAgentConversations(loadedAgentConversations, currentAgentConversations)
+  const { tasks: markedTasks, interruptedTasks } = markInterruptedOpenAIRunningTasks(storedTasks, Date.now())
+  const interruptedTaskIds = new Set(interruptedTasks.map((task) => task.id))
+  const favoriteState = useStore.getState()
+  const normalizedFavorites = normalizeLoadedFavoriteState(markedTasks.map(getPersistableTask), favoriteState.favoriteCollections, favoriteState.defaultFavoriteCollectionId)
+  const tasks = normalizedFavorites.tasks
+  if (normalizedFavorites.collections !== favoriteState.favoriteCollections) {
+    favoriteState.setFavoriteCollections(normalizedFavorites.collections)
+  }
+  if (normalizedFavorites.defaultFavoriteCollectionId !== favoriteState.defaultFavoriteCollectionId) {
+    useStore.getState().setDefaultFavoriteCollectionId(normalizedFavorites.defaultFavoriteCollectionId)
+  }
+  const migrationWrites: Promise<unknown>[] = tasks
+    .filter((task, index) => normalizedFavorites.changed || interruptedTaskIds.has(task.id) || task.rawResponsePayload !== markedTasks[index]?.rawResponsePayload || task.actualParams !== markedTasks[index]?.actualParams || task.actualParamsByImage !== markedTasks[index]?.actualParamsByImage || task.revisedPromptByImage !== markedTasks[index]?.revisedPromptByImage)
+    .map((task) => putTask(task))
+  useStore.getState().setTasks(tasks)
+  const recoveringRounds = new Set(tasks
+    .filter((task) => task.agentConversationId && task.agentRoundId && (isFalRecoverableTask(task) || isCustomRecoverableTask(task)))
+    .map((task) => getAgentRoundControllerKey(task.agentConversationId!, task.agentRoundId!)))
+  loadedAgentConversations = loadedAgentConversations.map((conversation) => ({
+    ...conversation,
+    rounds: conversation.rounds.map((round) =>
+      round.status === 'error' && round.error !== AGENT_STOPPED_MESSAGE && round.responseOutput?.length && recoveringRounds.has(getAgentRoundControllerKey(conversation.id, round.id))
+        ? { ...round, status: 'running', error: null, finishedAt: null }
+        : round),
+  }))
   const activeAgentConversationId = useStore.getState().activeAgentConversationId && loadedAgentConversations.some((conversation) => conversation.id === useStore.getState().activeAgentConversationId)
     ? useStore.getState().activeAgentConversationId
     : loadedAgentConversations[0]?.id ?? null
@@ -1575,10 +1652,11 @@ export async function initStore() {
         ...(state.appMode === 'agent' ? restoreAgentInputDraftState(agentInputDrafts, activeAgentConversationId) : {}),
       }
     })
-    await replaceStoredAgentConversations(loadedAgentConversations)
+    migrationWrites.push(replaceStoredAgentConversations(loadedAgentConversations))
   } else {
     useStore.setState({ agentConversationsLoaded: true })
   }
+  await Promise.all(migrationWrites)
   const shouldRewritePersistedLocalState = agentConversationMigrationPending
   agentConversationPersistenceReady = true
   agentConversationMigrationPending = false
@@ -1588,121 +1666,49 @@ export async function initStore() {
   if (shouldRewritePersistedLocalState) {
     useStore.setState({})
   }
-  const { tasks: markedTasks, interruptedTasks } = markInterruptedOpenAIRunningTasks(storedTasks, Date.now())
-  const interruptedTaskIds = new Set(interruptedTasks.map((task) => task.id))
-  const favoriteState = useStore.getState()
-  const normalizedFavorites = normalizeLoadedFavoriteState(markedTasks.map(getPersistableTask), favoriteState.favoriteCollections, favoriteState.defaultFavoriteCollectionId)
-  const tasks = normalizedFavorites.tasks
-  if (normalizedFavorites.collections !== favoriteState.favoriteCollections) {
-    favoriteState.setFavoriteCollections(normalizedFavorites.collections)
-  }
-  if (normalizedFavorites.defaultFavoriteCollectionId !== favoriteState.defaultFavoriteCollectionId) {
-    useStore.getState().setDefaultFavoriteCollectionId(normalizedFavorites.defaultFavoriteCollectionId)
-  }
-  await Promise.all(tasks
-    .filter((task, index) => normalizedFavorites.changed || interruptedTaskIds.has(task.id) || task.rawResponsePayload !== markedTasks[index]?.rawResponsePayload || task.actualParams !== markedTasks[index]?.actualParams || task.actualParamsByImage !== markedTasks[index]?.actualParamsByImage || task.revisedPromptByImage !== markedTasks[index]?.revisedPromptByImage)
-    .map((task) => putTask(task)))
-  useStore.getState().setTasks(tasks)
   showSupportPromptForExistingLocalData(tasks)
   const state = useStore.getState()
-  const persistedInputImages = state.inputImages
-  const galleryInputDraft = state.galleryInputDraft
-  const agentInputDrafts = state.agentInputDrafts
-
-  const imageReads = new Map<string, Promise<string | undefined>>()
-  const readImage = (id: string) => {
-    const pending = imageReads.get(id)
-    if (pending) return pending
-    const request = getImage(id).then((image) => {
-      if (image) cacheImage(id, image.dataUrl)
-      return image?.dataUrl
-    })
-    imageReads.set(id, request)
-    return request
-  }
-  const restoredInputImages: InputImage[] = []
-  for (const img of persistedInputImages) {
-    if (img.dataUrl) {
-      restoredInputImages.push(img)
-      cacheImage(img.id, img.dataUrl)
-      continue
-    }
-    const dataUrl = await readImage(img.id)
-    if (dataUrl) restoredInputImages.push({ ...img, dataUrl })
-  }
-  if (restoredInputImages.length !== persistedInputImages.length || restoredInputImages.some((img, index) => img.dataUrl !== persistedInputImages[index]?.dataUrl)) {
-    useStore.getState().setInputImages(restoredInputImages)
-  }
-
-  if (galleryInputDraft) {
-    const restoredGalleryImages: InputImage[] = []
-    for (const img of galleryInputDraft.inputImages) {
-      if (img.dataUrl) {
-        restoredGalleryImages.push(img)
-        cacheImage(img.id, img.dataUrl)
-        continue
+  const snapshot = state.privacyMode?.inputSnapshot
+  const background = [
+    state.galleryInputDraft, ...Object.values(state.agentInputDrafts),
+    snapshot, snapshot?.galleryInputDraft, ...Object.values(snapshot?.agentInputDrafts ?? {}),
+  ]
+  const seen = new Set<string>()
+  let draftImageReadFailed = false
+  // 先恢复输入框，其他分支的图片可以在用户继续输入时加载。
+  for (const group of [[state], background]) {
+    const images = new Map<string, string | undefined>()
+    for (const draft of group) {
+      if (!draft) continue
+      for (const img of draft.inputImages) {
+        if (seen.has(img.id)) continue
+        seen.add(img.id)
+        try {
+          const dataUrl = img.dataUrl || (await getImage(img.id))?.dataUrl
+          if (dataUrl) cacheImage(img.id, dataUrl)
+          images.set(img.id, dataUrl)
+        } catch (err) {
+          console.warn('读取草稿图片失败', err)
+          draftImageReadFailed = true
+        }
       }
-      const dataUrl = await readImage(img.id)
-      if (dataUrl) restoredGalleryImages.push({ ...img, dataUrl })
     }
-    const restoredGalleryDraft: AgentInputDraft = {
-      ...galleryInputDraft,
-      ...updateInputDraftImages(galleryInputDraft, restoredGalleryImages),
-    }
-    const shouldClearMask = galleryInputDraft.maskDraft !== restoredGalleryDraft.maskDraft
-    const galleryDraftsChanged =
-      restoredGalleryImages.length !== galleryInputDraft.inputImages.length ||
-      restoredGalleryImages.some((img, index) => img.dataUrl !== galleryInputDraft.inputImages[index]?.dataUrl) ||
-      shouldClearMask
-    if (galleryDraftsChanged) {
-      const latestState = useStore.getState()
-      const nextGalleryInputDraft = isEmptyAgentInputDraft(restoredGalleryDraft) ? null : restoredGalleryDraft
-      useStore.setState({
-        galleryInputDraft: nextGalleryInputDraft,
-        ...(latestState.appMode === 'gallery'
-          ? restoreGalleryInputDraftState(nextGalleryInputDraft)
-          : {}),
-      })
-    }
-  }
-
-  const restoredAgentInputDrafts: Record<string, AgentInputDraft> = {}
-  let agentDraftsChanged = false
-  for (const [conversationId, draft] of Object.entries(agentInputDrafts)) {
-    const restoredDraftImages: InputImage[] = []
-    for (const img of draft.inputImages) {
-      if (img.dataUrl) {
-        restoredDraftImages.push(img)
-        cacheImage(img.id, img.dataUrl)
-        continue
+    if (!images.size) continue
+    useStore.setState((latest) => {
+      const patch = hydrateInputDraftImages(latest, images)
+      const privacy = latest.privacyMode
+      if (!privacy) return patch
+      return {
+        ...patch,
+        privacyMode: {
+          ...privacy,
+          inputSnapshot: { ...privacy.inputSnapshot, ...hydrateInputDraftImages(privacy.inputSnapshot, images) },
+        },
       }
-      const dataUrl = await readImage(img.id)
-      if (dataUrl) restoredDraftImages.push({ ...img, dataUrl })
-    }
-
-    const restoredDraft: AgentInputDraft = {
-      ...draft,
-      ...updateInputDraftImages(draft, restoredDraftImages),
-    }
-    const shouldClearMask = draft.maskDraft !== restoredDraft.maskDraft
-    if (!isEmptyAgentInputDraft(restoredDraft)) restoredAgentInputDrafts[conversationId] = restoredDraft
-    if (
-      restoredDraftImages.length !== draft.inputImages.length ||
-      restoredDraftImages.some((img, index) => img.dataUrl !== draft.inputImages[index]?.dataUrl) ||
-      shouldClearMask
-    ) {
-      agentDraftsChanged = true
-    }
-  }
-  if (agentDraftsChanged) {
-    const latestState = useStore.getState()
-    useStore.setState({
-      agentInputDrafts: restoredAgentInputDrafts,
-      ...(latestState.appMode === 'agent'
-        ? restoreAgentInputDraftState(restoredAgentInputDrafts, latestState.activeAgentConversationId)
-        : {}),
     })
   }
+
+  if (draftImageReadFailed) useStore.getState().showToast('部分草稿参考图读取失败，请刷新重试', 'error')
 
   // 启动时只枚举 ID；候选孤立图片逐张核对，删除期间产生的新引用仍可恢复。
   const referencedIds = getReferencedImageIds(useStore.getState())
@@ -1724,7 +1730,7 @@ export async function initStore() {
   if (!isTauri) setTimeout(() => void migrateImagesToBlob(), 2_000)
 
   // 客户端关闭确认用同样的判断跳过这些任务，它们重启后会继续查询结果
-  for (const task of tasks) {
+  for (const task of useStore.getState().tasks) {
     if (isFalRecoverableTask(task)) scheduleFalRecovery(task.id, 0)
     if (isCustomRecoverableTask(task)) scheduleCustomRecovery(task.id, 0)
   }
@@ -2012,6 +2018,9 @@ function getActiveAgentConversation(): AgentConversation {
   if (existing) return existing
 
   const id = state.createAgentConversation()
+  useStore.setState((current) => syncActiveInputDraft(current, {
+    prompt: state.prompt, inputImages: state.inputImages, maskDraft: state.maskDraft, maskEditorImageId: state.maskEditorImageId,
+  }))
   return useStore.getState().agentConversations.find((conversation) => conversation.id === id)!
 }
 
@@ -2024,7 +2033,7 @@ function updateAgentConversation(conversationId: string, updater: (conversation:
 }
 
 function getAgentRoundControllerKey(conversationId: string, roundId: string) {
-  return `${conversationId}:${roundId}`
+  return JSON.stringify([conversationId, roundId])
 }
 
 function getDeletedActiveAgentTasks(conversationId: string, roundId: string, controller: AbortController) {
@@ -2054,13 +2063,8 @@ function appendAgentStoppedMessage(content: string) {
   return `${trimmed}\n\n${AGENT_STOPPED_MESSAGE}`
 }
 
-function markAgentRoundTasksStopped(conversationId: string, roundId: string, now = Date.now()) {
-  const runningTasks = useStore.getState().tasks.filter((task) =>
-    (task.status === 'running' || task.falRecoverable || task.customRecoverable) &&
-    task.agentConversationId === conversationId &&
-    task.agentRoundId === roundId,
-  )
-
+function stopAgentImageTasks(tasks: TaskRecord[], now = Date.now()) {
+  const runningTasks = tasks.filter((task) => task.status === 'running' || task.falRecoverable || task.customRecoverable)
   for (const task of runningTasks) {
     clearFalRecoveryTimer(task.id)
     stopTaskRequest(task.id)
@@ -2104,7 +2108,8 @@ function markAgentRoundTasksFailed(
 
 function markAgentRoundStopped(conversationId: string, roundId: string) {
   const now = Date.now()
-  const stoppedTasks = markAgentRoundTasksStopped(conversationId, roundId, now)
+  const stoppedTasks = stopAgentImageTasks(useStore.getState().tasks.filter((task) =>
+    task.agentConversationId === conversationId && task.agentRoundId === roundId), now)
   let stoppedRound = false
   updateAgentConversation(conversationId, (current) => {
     const round = current.rounds.find((item) => item.id === roundId)
@@ -2304,14 +2309,13 @@ async function readAgentImageDataUrls(ids: string[]) {
 
 function scrubAgentOutputPayloadsForDeletedTasks(deletedTasks: TaskRecord[]) {
   const deletedByRound = new Map<string, TaskRecord[]>()
-  const affectedConversationIds = new Set<string>()
+  const deletedWidths = new Map(deletedTasks.map((task) => [task.id, getAgentTaskImageSlots(task).length]))
   for (const task of deletedTasks) {
-    if (task.sourceMode !== 'agent' || !task.agentConversationId || !task.agentRoundId) continue
+    if (!task.agentConversationId || !task.agentRoundId) continue
     const key = getAgentRoundControllerKey(task.agentConversationId, task.agentRoundId)
     deletedByRound.set(key, [...(deletedByRound.get(key) ?? []), task])
-    affectedConversationIds.add(task.agentConversationId)
   }
-  if (deletedByRound.size === 0) return { updatedTasks: [], updatedConversations: [] }
+  if (!deletedWidths.size) return { updatedTasks: [], updatedConversations: [] }
 
   const updatedTasks: TaskRecord[] = []
   const updatedConversations: AgentConversation[] = []
@@ -2326,18 +2330,35 @@ function scrubAgentOutputPayloadsForDeletedTasks(deletedTasks: TaskRecord[]) {
     const roundsByKey = new Map<string, AgentRound>()
     let conversationsChanged = false
     const agentConversations = state.agentConversations.map((conversation) => {
-      if (!affectedConversationIds.has(conversation.id)) return conversation
       let changed = false
       const rounds = conversation.rounds.map((round) => {
         const key = getAgentRoundControllerKey(conversation.id, round.id)
         const roundDeletedTasks = deletedByRound.get(key)
+        const widths = round.outputTaskIds.filter((id) => deletedWidths.has(id) &&
+          (round.deletedOutputTaskWidths?.[id] ?? 1) !== deletedWidths.get(id))
+        if (widths.length) {
+          round = { ...round, deletedOutputTaskWidths: {
+            ...round.deletedOutputTaskWidths,
+            ...Object.fromEntries(widths.map((id) => [id, deletedWidths.get(id)!])),
+          } }
+          changed = true
+        }
         if (!roundDeletedTasks) return round
         roundsByKey.set(key, round)
-        if (!round.responseOutput?.length) return round
-        const responseOutput = scrubResponseOutputForDeletedAgentTasks(round, round.responseOutput, roundDeletedTasks, tasksByRound.get(key) ?? roundDeletedTasks)
-        if (responseOutput === round.responseOutput) return round
+        const responseOutput = round.responseOutput?.length
+          ? scrubResponseOutputForDeletedAgentTasks(round, round.responseOutput, roundDeletedTasks, tasksByRound.get(key) ?? roundDeletedTasks)
+          : round.responseOutput
+        const lostRecovery = round.status === 'running' && !agentRoundControllers.has(key) &&
+          !state.tasks.some((task) => task.agentConversationId === conversation.id && task.agentRoundId === round.id &&
+            (isFalRecoverableTask(task) || isCustomRecoverableTask(task))) &&
+          roundDeletedTasks.some((task) => isFalRecoverableTask(task) || isCustomRecoverableTask(task) || queuedAgentRecoveries.get(conversation.id)?.has(task.id))
+        if (responseOutput === round.responseOutput && !lostRecovery) return round
         changed = true
-        return { ...round, responseOutput }
+        return {
+          ...round,
+          responseOutput,
+          ...(lostRecovery ? { status: 'error' as const, error: '待恢复的图片任务已删除', finishedAt: Date.now() } : {}),
+        }
       })
       if (!changed) return conversation
       conversationsChanged = true
@@ -2429,8 +2450,20 @@ async function continueRecoveredAgentRound(taskId: string) {
       if (!isConversationHiddenByPrivacyMode(conversation.id)) showTaskCompletionNotification('Agent 回复失败', '请回到应用查看详情。', 'task-failure')
     }
 
-    const recovered = createReadyAgentRecoveredToolState(round, latestState.tasks)
-    if (!recovered) return
+    const roundTasks = latestState.tasks.filter((item) => item.agentRoundId === round.id && item.agentConversationId === conversation.id)
+    const recovered = createReadyAgentRecoveredToolState(round, roundTasks)
+    if (!recovered) {
+      if (round.status === 'running' && !roundTasks.some((item) => isFalRecoverableTask(item) || isCustomRecoverableTask(item))) {
+        failRound('无法恢复此轮的工具调用记录')
+      }
+      return
+    }
+    if (conversation.rounds.some((item) => agentRoundControllers.has(getAgentRoundControllerKey(conversation.id, item.id)))) {
+      const queued = queuedAgentRecoveries.get(conversation.id) ?? new Set()
+      queued.add(taskId)
+      queuedAgentRecoveries.set(conversation.id, queued)
+      return
+    }
 
     appendAgentRecoveredToolOutputs(conversation.id, round.id, recovered.additions)
     const updatedState = useStore.getState()
@@ -2455,7 +2488,6 @@ async function continueRecoveredAgentRound(taskId: string) {
       failRound('Agent API 配置不存在，无法继续恢复任务。')
       return
     }
-    const roundTasks = updatedState.tasks.filter((item) => item.agentRoundId === round.id)
     const resumeParams = roundTasks.find((item) => item.params)?.params
       ?? normalizeParamsForSettings(updatedState.params, createSettingsForApiProfile(normalizedSettings, imageProfile), { hasInputImages: round.inputImageIds.length > 0, agent: true })
     const maxToolCalls = Number.isFinite(normalizedSettings.agentMaxToolRounds)
@@ -2491,9 +2523,57 @@ async function continueRecoveredAgentRound(taskId: string) {
   }
 }
 
+let pendingAgentEdit: { initial: AppState } | null = null
+
+export async function editAgentRoundMessage(conversationId: string, round: AgentRound, content: string) {
+  const initial = useStore.getState()
+  if (initial.appMode !== 'agent' || initial.activeAgentConversationId !== conversationId) return
+  const request = { initial }
+  pendingAgentEdit = request
+  const key = agentDraftKey(conversationId, 'edit', round.id)
+  try {
+    if (initial.agentInputDrafts[key]) {
+      initial.setAgentEditingRoundId(round.id)
+      return
+    }
+    const images = await Promise.all(round.inputImageIds.map(async (id, index) => {
+      const dataUrl = await ensureImageCached(id)
+      if (!dataUrl) throw new Error(`第 ${index + 1} 张参考图已不存在，无法编辑此消息`)
+      return { id, dataUrl }
+    }))
+    const target = round.maskTargetImageId ?? round.inputImageIds[0]
+    const mask = round.maskImageId ? await ensureImageCached(round.maskImageId) : null
+    if (round.maskImageId && (!mask || !target || !round.inputImageIds.includes(target))) throw new Error('遮罩或底图已不存在，无法编辑此消息')
+    const latest = useStore.getState()
+    if (pendingAgentEdit !== request || !isAgentEditComposerCurrent(initial, latest)) return
+    const current = latest.agentConversations.find((item) => item.id === conversationId)
+    if (!current?.rounds.some((item) => item.id === round.id)) return
+    const userMessage = current.messages.find((item) => item.id === round.userMessageId && item.roundId === round.id)
+    latest.setAgentEditingRoundId(round.id)
+    useStore.setState(syncActiveInputDraft(useStore.getState(), {
+      prompt: userMessage?.content ?? content, inputImages: images,
+      maskDraft: mask && target ? { targetImageId: target, maskDataUrl: mask, updatedAt: Date.now() } : null,
+    }))
+  } catch (err) {
+    console.warn('读取待编辑消息的附件失败', err)
+    const latest = useStore.getState()
+    if (pendingAgentEdit === request && isAgentEditComposerCurrent(initial, latest)) {
+      latest.showToast(err instanceof Error ? err.message : '读取消息图片失败，请重新编辑', 'error')
+    }
+  } finally {
+    if (pendingAgentEdit === request) pendingAgentEdit = null
+  }
+}
+
+const preparingAgentConversations = new Map<string, Set<string>>()
+
 export async function submitAgentMessage() {
   const state = useStore.getState()
   const { settings, prompt, inputImages, maskDraft, params, showToast } = state
+  if (pendingAgentEdit && isAgentEditComposerCurrent(pendingAgentEdit.initial, state)) {
+    showToast('正在读取待编辑消息的图片，请稍候', 'info')
+    return
+  }
   if (state.batchProgress) {
     showToast('画廊批量任务进行中，请等待完成或回到画廊停止后再提交', 'error')
     return
@@ -2509,7 +2589,7 @@ export async function submitAgentMessage() {
 
   const activeProfile = getAgentTextApiProfile(normalizedSettings)!
   const imageProfile = getAgentImageApiProfile(normalizedSettings)!
-  const maskDisabledReason = maskDraft && getMaskDisabledReason(imageProfile)
+  const maskDisabledReason = maskDraft && getMaskDisabledReason(imageProfile, params.output_format)
   if (maskDisabledReason) {
     showToast(`${maskDisabledReason}，请移除遮罩或切换模型`, 'error')
     return
@@ -2527,7 +2607,7 @@ export async function submitAgentMessage() {
   }
 
   const conversation = getActiveAgentConversation()
-  if (conversation.rounds.some((round) => round.status === 'running')) {
+  if (preparingAgentConversations.has(conversation.id) || conversation.rounds.some((round) => round.status === 'running')) {
     showToast('请等待生成完成，或先停止生成', 'info')
     return
   }
@@ -2536,57 +2616,43 @@ export async function submitAgentMessage() {
   let maskImageId: string | null = null
   let maskTargetImageId: string | null = null
 
-  if (maskDraft) {
-    try {
+  const editingRound = state.agentEditingRoundId ? conversation.rounds.find((item) => item.id === state.agentEditingRoundId) : null
+  if (state.agentEditingRoundId && !editingRound) return
+  const parentPath = getAgentInputHistory(conversation, state.agentEditingRoundId)
+  const preparingPath = new Set(parentPath.map((item) => item.id))
+  if (editingRound) preparingPath.add(editingRound.id)
+  preparingAgentConversations.set(conversation.id, preparingPath)
+  try {
+    if (maskDraft) {
       orderedInputImages = orderInputImagesForMask(inputImages, maskDraft.targetImageId)
       await validateMaskMatchesImage(maskDraft.maskDataUrl, orderedInputImages[0].dataUrl)
       maskImageId = await storeImage(maskDraft.maskDataUrl, 'mask')
       cacheImage(maskImageId, maskDraft.maskDataUrl)
       maskTargetImageId = maskDraft.targetImageId
-    } catch (err) {
-      if (!inputImages.some((img) => img.id === maskDraft.targetImageId)) {
-        state.clearMaskDraft()
-      }
-      showToast(err instanceof Error ? err.message : String(err), 'error')
-      return
     }
-  }
-
-  // Agent 通过 Responses 发送图片，不支持 markup，标注直接合成进图片
-  try {
+    // Agent 通过 Responses 发送图片，标注直接合成进图片
     orderedInputImages = await persistTaskInputImages(orderedInputImages, false)
     if (maskTargetImageId) maskTargetImageId = orderedInputImages[0].id
+    if (preparingAgentConversations.get(conversation.id) !== preparingPath) {
+      await deleteUnreferencedImageIds([...orderedInputImages.map((image) => image.id), ...(maskImageId ? [maskImageId] : [])])
+      return
+    }
   } catch (err) {
+    if (preparingAgentConversations.get(conversation.id) !== preparingPath) return
     showToast(err instanceof Error ? err.message : String(err), 'error')
     return
+  } finally {
+    if (preparingAgentConversations.get(conversation.id) === preparingPath) preparingAgentConversations.delete(conversation.id)
   }
   const inputImageIds = uniqueIds(orderedInputImages.map((image) => image.id))
 
   const requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
   const imageRequestSettings = createSettingsForApiProfile(normalizedSettings, imageProfile)
   const now = Date.now()
-  const editingRound = state.agentEditingRoundId
-    ? conversation.rounds.find((item) => item.id === state.agentEditingRoundId) ?? null
-    : null
-  const editingRoundAssistantMessage = editingRound?.assistantMessageId
-    ? conversation.messages.find((message) => message.id === editingRound.assistantMessageId) ?? null
-    : conversation.messages.find((message) => message.roundId === editingRound?.id && message.role === 'assistant') ?? null
-  const editingRoundHasAssistantMessage = Boolean(editingRoundAssistantMessage)
-  const editingRoundHasErrorAssistantMessage = Boolean(
-    editingRound?.status === 'error' && editingRoundAssistantMessage?.content.startsWith('请求失败：'),
-  )
-  const editingRoundHasChildren = editingRound
-    ? conversation.rounds.some((round) => (round.parentRoundId ?? null) === editingRound.id)
-    : false
-  const shouldAppendToEditingRound = Boolean(
-    editingRound && !editingRoundHasChildren && (!editingRoundHasAssistantMessage || editingRoundHasErrorAssistantMessage),
-  )
-  const roundId = shouldAppendToEditingRound && editingRound ? editingRound.id : genId()
-  const userMessageId = shouldAppendToEditingRound && editingRound ? editingRound.userMessageId : genId()
-  const activeRounds = getActiveAgentRounds(conversation)
-  const activeLeafId = activeRounds[activeRounds.length - 1]?.id ?? null
-  const parentRoundId = editingRound ? editingRound.parentRoundId ?? null : activeLeafId
-  const parentPath = parentRoundId ? getAgentRoundPath(conversation, parentRoundId) : []
+  const roundId = genId()
+  const userMessageId = genId()
+  const parentRoundId = parentPath[parentPath.length - 1]?.id ?? null
+  const activeLeafId = conversation.activeRoundId ?? null
   const normalizedParams = {
     ...normalizeParamsForSettings(params, imageRequestSettings, { hasInputImages: inputImageIds.length > 0, agent: true }),
     n: DEFAULT_PARAMS.n,
@@ -2594,10 +2660,10 @@ export async function submitAgentMessage() {
   }
   const round: AgentRound = {
     id: roundId,
-    index: shouldAppendToEditingRound && editingRound ? editingRound.index : parentPath.length + 1,
+    index: parentPath.length + 1,
     parentRoundId,
-    ...(editingRoundHasErrorAssistantMessage && editingRoundAssistantMessage ? { assistantMessageId: editingRoundAssistantMessage.id } : {}),
     userMessageId,
+    userBranchId: userMessageId,
     prompt: trimmedPrompt,
     inputImageIds,
     maskTargetImageId,
@@ -2619,38 +2685,47 @@ export async function submitAgentMessage() {
     createdAt: now,
   }
 
-  let fallbackTitle: string | null = null
-  updateAgentConversation(conversation.id, (current) => {
-    const nextTitle = current.rounds.length === 0 ? createAgentConversationTitle(stripImageMentionMarkers(trimmedPrompt), current.title) : current.title
-    if (current.rounds.length === 0) fallbackTitle = nextTitle
-    const messages = shouldAppendToEditingRound
-      ? current.messages.some((message) => message.id === userMessageId)
-        ? current.messages.map((message) => {
-            if (message.id === userMessageId) return userMessage
-            if (editingRoundHasErrorAssistantMessage && message.id === editingRoundAssistantMessage?.id) {
-              return { ...message, content: '', outputTaskIds: [] }
-            }
-            return message
-          })
-        : [...current.messages, userMessage]
-      : [...current.messages, userMessage]
+  const latest = useStore.getState()
+  const current = latest.agentConversations.find((item) => item.id === conversation.id)
+  if (!current || (parentRoundId && !current.rounds.some((item) => item.id === parentRoundId)) ||
+    (editingRound && !current.rounds.some((item) => item.id === editingRound.id))) return
 
-    return {
+  const sameBranch = current.activeRoundId === conversation.activeRoundId
+  const privacy = !state.privacyMode && latest.privacyMode
+  const composer = privacy ? privacy.inputSnapshot : latest
+  const ownsDrafts = !state.privacyMode || (latest.privacyMode && latest.privacyModeEpoch === state.privacyModeEpoch)
+  const visible = ownsDrafts && composer.appMode === 'agent' && composer.activeAgentConversationId === conversation.id
+  const sameComposer = visible && sameBranch && composer.agentEditingRoundId === state.agentEditingRoundId
+  const key = editingRound ? agentDraftKey(conversation.id, 'edit', editingRound.id)
+    : sameBranch ? conversation.id : agentDraftKey(conversation.id, 'branch', activeLeafId)
+  const draft = sameComposer ? composer : composer.agentInputDrafts[key]
+  const unchanged = draft && draft.prompt === prompt && draft.maskDraft?.maskDataUrl === maskDraft?.maskDataUrl &&
+    draft.maskDraft?.targetImageId === maskDraft?.targetImageId &&
+    draft.inputImages.length === inputImages.length && draft.inputImages.every((img, index) =>
+      img.id === inputImages[index].id && img.markupImageId === inputImages[index].markupImageId)
+  const drafts = { ...composer.agentInputDrafts }
+  if (unchanged) delete drafts[key]
+  const select = sameBranch && (!editingRound || !visible || (sameComposer && unchanged))
+  if (select && editingRound && drafts[conversation.id]) {
+    drafts[agentDraftKey(conversation.id, 'branch', activeLeafId)] = drafts[conversation.id]
+    delete drafts[conversation.id]
+  }
+  const fallbackTitle = current.rounds.length === 0 ? createAgentConversationTitle(stripImageMentionMarkers(trimmedPrompt), current.title) : null
+  const draftPatch = {
+    agentInputDrafts: drafts,
+    ...(sameComposer && unchanged ? { ...clearInputDraftState(), agentEditingRoundId: null } : {}),
+  }
+  useStore.setState({
+    ...(ownsDrafts && (privacy ? { privacyMode: { ...privacy, inputSnapshot: { ...privacy.inputSnapshot, ...draftPatch } } } : draftPatch)),
+    agentConversations: latest.agentConversations.map((item) => item === current ? {
       ...current,
-      title: nextTitle,
-      activeRoundId: roundId,
+      title: fallbackTitle ?? current.title,
+      ...(select ? selectAgentBranch(current, roundId) : {}),
       updatedAt: now,
-      rounds: shouldAppendToEditingRound
-        ? current.rounds.map((item) => item.id === roundId ? round : item)
-        : [...current.rounds, round],
-      messages,
-    }
+      rounds: [...current.rounds, round],
+      messages: [...current.messages, userMessage],
+    } : item),
   })
-
-  state.setPrompt('')
-  state.clearInputImages()
-  state.clearMaskDraft()
-  state.setAgentEditingRoundId(null)
 
   if (fallbackTitle) {
     void generateAgentConversationTitle(conversation.id, stripImageMentionMarkers(trimmedPrompt), inputImageIds, requestSettings, activeProfile, fallbackTitle)
@@ -2659,9 +2734,13 @@ export async function submitAgentMessage() {
   void executeAgentRound(conversation.id, roundId, normalizedParams, requestSettings, activeProfile, imageProfile)
 }
 
-export async function regenerateAgentAssistantMessage(conversationId: string, roundId: string) {
+export async function retryAgentMessage(conversationId: string, roundId: string, role: AgentMessage['role']) {
   const state = useStore.getState()
   const { settings, params, showToast } = state
+  if (state.batchProgress) {
+    showToast('画廊批量任务进行中，请等待完成或回到画廊停止后再提交', 'error')
+    return
+  }
   const normalizedSettings = normalizeSettings(settings)
 
   const agentValidationError = getAgentProfileValidationError(normalizedSettings)
@@ -2684,12 +2763,12 @@ export async function regenerateAgentAssistantMessage(conversationId: string, ro
     return
   }
 
-  if (conversation.rounds.some((round) => round.status === 'running')) {
+  if (preparingAgentConversations.has(conversation.id) || conversation.rounds.some((round) => round.status === 'running')) {
     showToast('请等待生成完成，或先停止生成', 'info')
     return
   }
 
-  const maskDisabledReason = sourceRound.maskImageId && getMaskDisabledReason(imageProfile)
+  const maskDisabledReason = sourceRound.maskImageId && getMaskDisabledReason(imageProfile, params.output_format)
   if (maskDisabledReason) {
     showToast(`${maskDisabledReason}，请移除遮罩或切换模型`, 'error')
     return
@@ -2710,37 +2789,6 @@ export async function regenerateAgentAssistantMessage(conversationId: string, ro
     transparent_output: false,
   }
   const now = Date.now()
-  if (sourceRound.status === 'error') {
-    const assistantMessageId = sourceRound.assistantMessageId
-      ?? conversation.messages.find((message) => message.roundId === sourceRound.id && message.role === 'assistant')?.id
-    updateAgentConversation(conversationId, (current) => ({
-      ...current,
-      activeRoundId: sourceRound.id,
-      updatedAt: now,
-      rounds: current.rounds.map((round) =>
-        round.id === sourceRound.id
-          ? {
-              ...round,
-              outputTaskIds: [],
-              responseId: undefined,
-              responseOutput: undefined,
-              status: 'running',
-              error: null,
-              finishedAt: null,
-            }
-          : round,
-      ),
-      messages: assistantMessageId
-        ? current.messages.map((message) =>
-            message.id === assistantMessageId ? { ...message, content: '', outputTaskIds: [] } : message,
-          )
-        : current.messages,
-    }))
-    state.setAgentEditingRoundId(null)
-    void executeAgentRound(conversationId, sourceRound.id, normalizedParams, requestSettings, activeProfile, imageProfile)
-    return
-  }
-
   const newRoundId = genId()
   const newUserMessageId = genId()
   const newRound: AgentRound = {
@@ -2748,6 +2796,7 @@ export async function regenerateAgentAssistantMessage(conversationId: string, ro
     index: sourceRound.index,
     parentRoundId: sourceRound.parentRoundId ?? null,
     userMessageId: newUserMessageId,
+    userBranchId: role === 'assistant' ? sourceRound.userBranchId ?? sourceRound.userMessageId : newUserMessageId,
     prompt: sourceRound.prompt || sourceUserMessage.content.trim(),
     inputImageIds,
     maskTargetImageId: sourceRound.maskTargetImageId ?? sourceUserMessage.maskTargetImageId ?? null,
@@ -2771,12 +2820,11 @@ export async function regenerateAgentAssistantMessage(conversationId: string, ro
 
   updateAgentConversation(conversationId, (current) => ({
     ...current,
-    activeRoundId: newRoundId,
     updatedAt: now,
     rounds: [...current.rounds, newRound],
     messages: [...current.messages, newUserMessage],
   }))
-  state.setAgentEditingRoundId(null)
+  state.setActiveAgentRoundId(conversationId, newRoundId)
   void executeAgentRound(conversationId, newRoundId, normalizedParams, requestSettings, activeProfile, imageProfile)
 }
 
@@ -2803,21 +2851,23 @@ async function executeAgentRound(
     const maskDataUrl = round.maskImageId ? await ensureImageCached(round.maskImageId) : undefined
     if (round.maskImageId && !maskDataUrl) throw new Error('遮罩图片已不存在')
 
+    const maskTarget = maskDataUrl ? round.maskTargetImageId ?? round.inputImageIds[0] : undefined
+    if (maskDataUrl && (!maskTarget || !round.inputImageIds.includes(maskTarget))) throw new Error('遮罩底图已不存在')
     const apiInput = await buildAgentApiInput({
       conversation,
       currentRound: round,
+      maskTargetImageId: requestSettings.agentApiConfigMode === 'hybrid' ? undefined : maskTarget,
       tasks: latestState.tasks,
       loadImage: ensureImageCached,
     })
     if (controller.signal.aborted) throw createAgentAbortError()
-    const existingAssistantMessage = round.assistantMessageId
-      ? conversation.messages.find((message) => message.id === round.assistantMessageId) ?? null
-      : conversation.messages.find((message) => message.roundId === roundId && message.role === 'assistant') ?? null
+    const existingAssistantMessage = getAgentAssistantMessage(conversation, round)
     const assistantMessageId = existingAssistantMessage?.id ?? genId()
     const resumedAssistantContent = resume ? existingAssistantMessage?.content.trim() ?? '' : ''
     const shouldStreamAssistantMessage = activeProfile.streamImages === true
     const imageRequestSettings = createSettingsForApiProfile(requestSettings, imageProfile)
     const imageParams = normalizeParamsForSettings(params, imageRequestSettings, { hasInputImages: round.inputImageIds.length > 0, agent: true })
+    const taskInputIds = maskTarget ? uniqueIds([maskTarget, ...round.inputImageIds]) : round.inputImageIds
     const streamingTaskIds: string[] = resume ? [...round.outputTaskIds] : []
     const taskIdByToolCallId = new Map<string, string>()
     const taskByToolCallId = new Map<string, TaskRecord>()
@@ -2858,13 +2908,14 @@ async function executeAgentRound(
     const ensureStreamingAgentTask = async (
       toolCallId: string,
       taskPrompt = '',
-      inputImageIds = round.inputImageIds ?? [],
+      inputImageIds = taskInputIds,
       options: { createdAt?: number; agentBatchCallId?: string; agentBatchItemId?: string; maskTargetImageId?: string | null; maskImageId?: string | null; taskParams?: TaskParams } = {},
     ) => {
+      if (controller.signal.aborted || getLatestRound()?.status !== 'running') throw createAgentAbortError()
       const existingTaskId = taskIdByToolCallId.get(toolCallId)
       if (existingTaskId) return existingTaskId
 
-      const existingTask = useStore.getState().tasks.find((task) => task.agentToolCallId === toolCallId)
+      const existingTask = useStore.getState().tasks.find((task) => task.agentConversationId === conversationId && task.agentRoundId === roundId && task.agentToolCallId === toolCallId)
       if (existingTask) {
         taskIdByToolCallId.set(toolCallId, existingTask.id)
         taskByToolCallId.set(toolCallId, existingTask)
@@ -2883,7 +2934,7 @@ async function executeAgentRound(
         apiMode: imageProfile.apiMode,
         apiModel: imageProfile.model,
         inputImageIds,
-        maskTargetImageId: options.maskTargetImageId !== undefined ? options.maskTargetImageId : round.maskTargetImageId ?? null,
+        maskTargetImageId: options.maskTargetImageId !== undefined ? options.maskTargetImageId : maskTarget ?? null,
         maskImageId: options.maskImageId !== undefined ? options.maskImageId : round.maskImageId ?? null,
         outputImages: [],
         status: 'running',
@@ -2917,7 +2968,7 @@ async function executeAgentRound(
       const stored = await storeImageWithSize(image.dataUrl, 'generated')
       cacheImage(stored.id, image.dataUrl)
       const latestBeforeUpdate = useStore.getState().tasks.find((task) => task.id === taskId)
-      if (!latestBeforeUpdate) {
+      if (controller.signal.aborted || getLatestRound()?.status !== 'running' || !latestBeforeUpdate) {
         await deleteUnreferencedImageIds([stored.id])
         return { taskId, committed: false }
       }
@@ -3031,46 +3082,32 @@ async function executeAgentRound(
     let reachedToolLimit = resume ? toolCallsUsed >= maxToolCalls : false
     let pendingToolTextSeparator = false
 
-    // Helper: resolve reference image ids to data URLs for batch image calls
-    const resolveReferenceImages = async (referenceIds: string[]): Promise<{ dataUrls: string[]; imageIds: string[]; sourceUrls: (string | null)[] }> => {
-      const dataUrls: string[] = []
+    const resolveReferenceImages = async (refIds: string[], forRequest = true) => {
+      const state = useStore.getState()
+      const latest = state.agentConversations.find((item) => item.id === conversationId)
+      if (!latest) throw createAgentAbortError()
+      const path = getAgentRoundPath(latest, roundId)
+      const referenceIds = uniqueIds(maskTarget && forRequest
+        ? [getAgentCurrentReferenceId(round, round.inputImageIds.indexOf(maskTarget)), ...refIds]
+        : refIds)
       const imageIds: string[] = []
+      const dataUrls: string[] = []
       const sourceUrls: (string | null)[] = []
-      const imageSourceUrls = useStore.getState().imageSourceUrls
       for (const refId of referenceIds) {
-        // Resolve both generated image refs and current/user input refs from XML tags.
-        const latestConv = useStore.getState().agentConversations.find((item) => item.id === conversationId)
-        if (!latestConv) continue
-        for (const r of getAgentRoundPath(latestConv, roundId)) {
-          for (let imgIdx = 0; imgIdx < r.inputImageIds.length; imgIdx++) {
-            const currentRefId = getAgentCurrentReferenceId(r, imgIdx)
-            if (currentRefId === refId) {
-              const imageId = r.inputImageIds[imgIdx]
-              const dataUrl = await ensureImageCached(imageId)
-              if (dataUrl) {
-                dataUrls.push(dataUrl)
-                sourceUrls.push(imageSourceUrls[imageId] ?? null)
-              }
-              imageIds.push(imageId)
-            }
-          }
-          const outputImages = collectAgentRoundOutputImageSlots(r, useStore.getState().tasks)
-          for (let imgIdx = 0; imgIdx < outputImages.length; imgIdx++) {
-            const generatedRefId = getAgentGeneratedImageReferenceId(r, imgIdx)
-            if (generatedRefId === refId) {
-              const imageId = outputImages[imgIdx]
-              if (!imageId) continue
-              const dataUrl = await ensureImageCached(imageId)
-              if (dataUrl) {
-                dataUrls.push(dataUrl)
-                sourceUrls.push(imageSourceUrls[imageId] ?? null)
-              }
-              imageIds.push(imageId)
-            }
-          }
+        const [, number, type, slot] = refId.split('-')
+        const source = path.find((item) => item.index === Number(number))
+        const ids = source && (type === 'reference' ? source.inputImageIds : collectAgentRoundOutputImageSlots(source, state.tasks))
+        const id = ids?.[Number(slot) - 1]
+        const dataUrl = id && await ensureImageCached(id)
+        if (!id || !dataUrl) {
+          if (forRequest) throw new Error(`参考图片 ${refId} 已不存在`)
+          continue
         }
+        imageIds.push(id)
+        dataUrls.push(dataUrl)
+        sourceUrls.push(state.imageSourceUrls[id] ?? null)
       }
-      return { dataUrls, imageIds, sourceUrls }
+      return { imageIds, dataUrls, sourceUrls, referenceIds }
     }
 
     const parseSingleImageCallArguments = (args: string): { id: string; prompt: string } | null => {
@@ -3106,6 +3143,7 @@ async function executeAgentRound(
         params: opts.taskParams,
         inputImageDataUrls: opts.referenceImageDataUrls,
         inputImageUrls: opts.referenceImageSourceUrls,
+        maskDataUrl,
         skipCodexCliSizePrompt: true,
         onPromptHintsPrepared: (promptHints) => updateTaskInStore(opts.taskId, { promptHints }),
         onPartialImage: opts.onPartialImage
@@ -3156,8 +3194,7 @@ async function executeAgentRound(
       const item = parseSingleImageCallArguments(functionCallItem.arguments ?? '')
       if (!item) return JSON.stringify({ error: 'Invalid or empty image arguments' })
 
-      const referenceIds = uniqueIds(extractAgentReferenceIds(item.prompt))
-      const references = await resolveReferenceImages(referenceIds)
+      const references = await resolveReferenceImages(extractAgentReferenceIds(item.prompt))
       const toolCallId = callId || genId()
       const taskParams = {
         ...normalizeParamsForSettings(imageParams, imageRequestSettings, { hasInputImages: references.dataUrls.length > 0, agent: true }),
@@ -3167,8 +3204,7 @@ async function executeAgentRound(
       const taskId = await ensureStreamingAgentTask(toolCallId, item.prompt, references.imageIds, {
         createdAt: Date.now(),
         taskParams,
-        maskTargetImageId: null,
-        maskImageId: null,
+        maskTargetImageId: maskDataUrl ? references.imageIds[0] : null,
       })
 
       try {
@@ -3223,8 +3259,7 @@ async function executeAgentRound(
       // Create task cards in model-provided order before starting network calls.
       const batchExecutionItems = []
       for (const item of batchItems) {
-        const referenceIds = uniqueIds(extractAgentReferenceIds(item.prompt))
-        const references = await resolveReferenceImages(referenceIds)
+        const references = await resolveReferenceImages(extractAgentReferenceIds(item.prompt))
         const batchToolCallId = genId()
         const taskParams = requestSettings.agentApiConfigMode === 'hybrid'
           ? {
@@ -3235,16 +3270,15 @@ async function executeAgentRound(
         await ensureStreamingAgentTask(batchToolCallId, item.prompt, references.imageIds, {
           createdAt: Date.now(),
           taskParams,
-          maskTargetImageId: null,
-          maskImageId: null,
+          maskTargetImageId: maskDataUrl ? references.imageIds[0] : null,
           ...(callId ? { agentBatchCallId: callId } : {}),
           agentBatchItemId: item.id,
         })
-        batchExecutionItems.push({ item, batchToolCallId, references, referenceIds, taskParams })
+        batchExecutionItems.push({ item, batchToolCallId, references, taskParams })
       }
 
       // Fire all batch items concurrently after all cards are visible.
-      const batchPromises = batchExecutionItems.map(async ({ item, batchToolCallId, references, referenceIds, taskParams }) => {
+      const batchPromises = batchExecutionItems.map(async ({ item, batchToolCallId, references, taskParams }) => {
         let committed = false
         const batchResult = requestSettings.agentApiConfigMode === 'hybrid'
           ? {
@@ -3272,7 +3306,8 @@ async function executeAgentRound(
               batchItemId: item.id,
               prompt: item.prompt,
               referenceImageDataUrls: references.dataUrls,
-              referenceIds,
+              referenceIds: references.referenceIds,
+              maskDataUrl,
               allowPromptRewrite: requestSettings.allowPromptRewrite,
               signal: controller.signal,
               onImageToolStarted: shouldStreamAssistantMessage
@@ -3461,7 +3496,7 @@ async function executeAgentRound(
           const completedTaskId = completed.taskId
           const promptRefIds = uniqueIds(extractAgentReferenceIds(image.revisedPrompt ?? ''))
           if (promptRefIds.length > 0) {
-            const promptRefs = await resolveReferenceImages(promptRefIds)
+            const promptRefs = await resolveReferenceImages(promptRefIds, false)
             if (promptRefs.imageIds.length > 0) {
               const latestTask = useStore.getState().tasks.find((t) => t.id === completedTaskId)
               if (latestTask) {
@@ -3475,8 +3510,12 @@ async function executeAgentRound(
           continue
         }
         const promptRefIds = uniqueIds(extractAgentReferenceIds(image.revisedPrompt ?? ''))
-        const promptRefs = await resolveReferenceImages(promptRefIds)
+        const promptRefs = await resolveReferenceImages(promptRefIds, false)
         const stored = await storeImageWithSize(image.dataUrl, 'generated')
+        if (controller.signal.aborted || getLatestRound()?.status !== 'running') {
+          await deleteUnreferencedImageIds([stored.id])
+          throw createAgentAbortError()
+        }
         cacheImage(stored.id, image.dataUrl)
         const actualParams = deriveAgentImageActualParams(image.actualParams)
         const task: TaskRecord = {
@@ -3489,8 +3528,8 @@ async function executeAgentRound(
           apiProfileName: imageProfile.name,
           apiMode: imageProfile.apiMode,
           apiModel: imageProfile.model,
-          inputImageIds: uniqueIds([...(round?.inputImageIds ?? []), ...promptRefs.imageIds]),
-          maskTargetImageId: round?.maskTargetImageId ?? null,
+          inputImageIds: uniqueIds([...taskInputIds, ...promptRefs.imageIds]),
+          maskTargetImageId: maskTarget ?? null,
           maskImageId: round?.maskImageId ?? null,
           outputImages: [stored.id],
           actualParams,
@@ -3631,6 +3670,7 @@ async function executeAgentRound(
       pendingToolTextSeparator = true
     }
 
+    if (controller.signal.aborted || getLatestRound()?.status !== 'running') return
     markAgentRoundTasksFailed(
       conversationId,
       roundId,
@@ -3671,9 +3711,9 @@ async function executeAgentRound(
       rounds: current.rounds.map((round) =>
         round.id === roundId
           ? {
-              ...round,
+              ...setAgentRoundOutputTaskIds(round, streamingTaskIds.filter((id) => existingTaskIds.has(id) ||
+                (round.outputTaskIds.includes(id) && (round.deletedOutputTaskWidths?.[id] ?? 1) > 0))),
               assistantMessageId,
-              outputTaskIds: taskIds,
               responseId: lastResponseId,
               responseOutput,
               status: 'done',
@@ -3715,9 +3755,9 @@ async function executeAgentRound(
 
     updateAgentConversation(conversationId, (current) => {
       const failedRound = current.rounds.find((round) => round.id === roundId)
-      const existingAssistantMessage = failedRound?.assistantMessageId
-        ? current.messages.find((item) => item.id === failedRound.assistantMessageId)
-        : current.messages.find((item) => item.roundId === roundId && item.role === 'assistant')
+      if (!failedRound) return current
+      const existingAssistantMessage = getAgentAssistantMessage(current, failedRound)
+      const assistantMessageId = existingAssistantMessage?.id ?? genId()
       const errorContent = `请求失败：${message}`
 
       return {
@@ -3728,7 +3768,7 @@ async function executeAgentRound(
           round.id === roundId
             ? {
                 ...round,
-                ...(existingAssistantMessage ? { assistantMessageId: existingAssistantMessage.id } : {}),
+                assistantMessageId,
                 status: 'error',
                 error: message,
                 finishedAt: Date.now(),
@@ -3740,7 +3780,7 @@ async function executeAgentRound(
           : [
               ...current.messages,
               {
-                id: genId(),
+                id: assistantMessageId,
                 role: 'assistant',
                 content: errorContent,
                 roundId,
@@ -3756,6 +3796,11 @@ async function executeAgentRound(
   } finally {
     if (agentRoundControllers.get(controllerKey) === controller) {
       agentRoundControllers.delete(controllerKey)
+    }
+    const queued = queuedAgentRecoveries.get(conversationId)
+    if (queued) {
+      queuedAgentRecoveries.delete(conversationId)
+      for (const taskId of queued) void continueRecoveredAgentRound(taskId)
     }
     const deletedTasks = getDeletedActiveAgentTasks(conversationId, roundId, controller)
     try {
@@ -4156,6 +4201,7 @@ export async function retryTask(task: TaskRecord) {
     transparentOutput: transparentMeta?.transparentOutput,
     transparentPrompt: transparentMeta?.effectivePrompt,
     outputImages: [],
+    removedOutputImageIndices: undefined,
     outputErrors: undefined,
     transparentOriginalImages: undefined,
     actualParams: undefined,
@@ -4297,28 +4343,16 @@ export async function editOutputs(task: TaskRecord) {
   showToast(`已添加 ${added} 张输出图到输入`, 'success')
 }
 
-function getAgentRoundDeletionTaskIds(conversation: AgentConversation, round: AgentRound, tasks: TaskRecord[]) {
-  const messageIds = new Set(conversation.messages.filter((message) => message.roundId === round.id).map((message) => message.id))
-  messageIds.add(round.userMessageId)
-  if (round.assistantMessageId) messageIds.add(round.assistantMessageId)
-  return uniqueIds([
-    ...round.outputTaskIds,
-    ...conversation.messages
-      .filter((message) => messageIds.has(message.id))
-      .flatMap((message) => message.outputTaskIds ?? []),
-    ...tasks
-      .filter((task) => task.agentRoundId === round.id || Boolean(task.agentMessageId && messageIds.has(task.agentMessageId)))
-      .map((task) => task.id),
-  ])
-}
-
-function hasRunningAgentDeletionWork(conversationId: string, roundIds: Set<string>, taskIds: Set<string>, state: AppState) {
-  const conversation = state.agentConversations.find((item) => item.id === conversationId)
-  if (conversation?.rounds.some((round) => roundIds.has(round.id) && round.status === 'running')) return true
-  if (state.tasks.some((task) => taskIds.has(task.id) && task.status === 'running')) return true
-  for (const roundId of roundIds) {
-    const key = getAgentRoundControllerKey(conversationId, roundId)
-    const round = conversation?.rounds.find((item) => item.id === roundId)
+function hasRunningAgentDeletionWork(conversation: AgentConversation, roundIds: Set<string>, taskIds: Set<string>, state: AppState) {
+  const preparing = preparingAgentConversations.get(conversation.id)
+  if (preparing && [...roundIds].some((id) => preparing.has(id))) return true
+  const affected = getAgentRoundSubtreeIds(conversation, roundIds)
+  if (conversation.rounds.some((round) => affected.has(round.id) && round.status === 'running')) return true
+  if (state.tasks.some((task) => task.status === 'running' && (taskIds.has(task.id) ||
+    (task.agentConversationId === conversation.id && task.agentRoundId && affected.has(task.agentRoundId))))) return true
+  for (const roundId of affected) {
+    const key = getAgentRoundControllerKey(conversation.id, roundId)
+    const round = conversation.rounds.find((item) => item.id === roundId)
     const controller = agentRoundControllers.get(key)
     if (controller && !controller.signal.aborted) return true
     if (agentRecoveryContinuations.has(key) && round?.status !== 'done' && round?.error !== AGENT_STOPPED_MESSAGE) return true
@@ -4326,17 +4360,16 @@ function hasRunningAgentDeletionWork(conversationId: string, roundIds: Set<strin
   return false
 }
 
-function cleanDeletedAgentReferences(conversation: AgentConversation, taskIds: Set<string>, assistantMessageIds: Set<string>, now: number) {
+function cleanDeletedAgentReferences(conversation: AgentConversation, taskIds: Set<string>, assistantMessageIds: Set<string> | null, now: number) {
   let changed = false
   const rounds = conversation.rounds.map((round) => {
     const outputTaskIds = round.outputTaskIds.filter((taskId) => !taskIds.has(taskId))
-    const clearAssistantMessage = Boolean(round.assistantMessageId && assistantMessageIds.has(round.assistantMessageId))
+    const clearAssistantMessage = Boolean(round.assistantMessageId && assistantMessageIds?.has(round.assistantMessageId))
     if (outputTaskIds.length === round.outputTaskIds.length && !clearAssistantMessage) return round
     changed = true
     return {
-      ...round,
+      ...setAgentRoundOutputTaskIds(round, outputTaskIds),
       ...(clearAssistantMessage ? { assistantMessageId: undefined } : {}),
-      outputTaskIds,
     }
   })
   const messages = conversation.messages.map((message) => {
@@ -4353,8 +4386,10 @@ async function deleteAgentRoundAndTasks(conversationId: string, roundId: string)
   const round = conversation?.rounds.find((item) => item.id === roundId)
   if (!conversation || !round) return 'not-found'
 
-  const taskIds = new Set(getAgentRoundDeletionTaskIds(conversation, round, state.tasks))
-  if (hasRunningAgentDeletionWork(conversationId, new Set([roundId]), taskIds, state)) return 'running'
+  const replies = getAgentSiblingRounds(conversation, round, 'assistant')
+  const roundIds = new Set(replies.map((item) => item.id))
+  const taskIds = getAgentRoundDeletionTaskIds(conversation, roundIds, state.tasks, state.agentConversations)
+  if (hasRunningAgentDeletionWork(conversation, roundIds, taskIds, state)) return 'running'
 
   let deleted = false
   try {
@@ -4364,33 +4399,32 @@ async function deleteAgentRoundAndTasks(conversationId: string, roundId: string)
       if (!latestConversation || !latestRound) return null
 
       const oldActivePath = getActiveAgentRounds(latestConversation)
-      const nextConversation = deleteAgentRoundFromConversation(latestConversation, roundId)
+      const sharedTaskIds = getAgentSharedTaskIds(latestConversation, latest.agentConversations)
+      const nextConversation = deleteAgentRoundFromConversation(latestConversation, roundId, Date.now(), latest.tasks, sharedTaskIds)
       const newActivePath = getActiveAgentRounds(nextConversation)
-      const removedMessageIds = new Set([
-        latestRound.userMessageId,
-        ...(latestRound.assistantMessageId ? [latestRound.assistantMessageId] : []),
-        ...latestConversation.messages.filter((message) => message.roundId === roundId).map((message) => message.id),
-      ])
       const removedAssistantMessageIds = new Set(latestConversation.messages
-        .filter((message) => message.role === 'assistant' && removedMessageIds.has(message.id))
+        .filter((message) => message.role === 'assistant' && roundIds.has(message.roundId))
         .map((message) => message.id))
-      if (latestRound.assistantMessageId) removedAssistantMessageIds.add(latestRound.assistantMessageId)
       const now = Date.now()
       const agentConversations = latest.agentConversations.map((item) => {
-        const candidate = item.id === conversationId
-          ? { ...nextConversation, messages: nextConversation.messages.filter((message) => !removedMessageIds.has(message.id)) }
-          : item
-        return cleanDeletedAgentReferences(candidate, deletedTaskIds, removedAssistantMessageIds, now)
+        const candidate = item.id === conversationId ? nextConversation : item
+        return cleanDeletedAgentReferences(candidate, deletedTaskIds, item.id === conversationId ? removedAssistantMessageIds : null, now)
       })
-      const agentInputDrafts = remapAgentInputDraftMentionsForPathChange(latest.agentInputDrafts, conversationId, oldActivePath, newActivePath)
+      const agentInputDrafts = reconcileAgentDraftsAfterDeletion(latest.agentInputDrafts, latestConversation, nextConversation)
+      const editId = latest.agentEditingRoundId
+      const editKey = editId ? agentDraftKey(conversationId, 'edit', editId) : null
+      const nextEditId = latest.activeAgentConversationId === conversationId && editId && roundIds.has(editId) ? null : editId
+      const restore = (editKey && latest.agentInputDrafts[editKey]) || latestConversation.activeRoundId !== nextConversation.activeRoundId
+      const visibleDraft = restore
+        ? restoreAgentInputDraftState(agentInputDrafts, nextEditId ? editKey : conversationId)
+        : { prompt: remapAgentRoundMentionsForPathChange(latest.prompt, oldActivePath, newActivePath) }
       deleted = true
       return {
+        tasks: latest.tasks.map((task) => sharedTaskIds.has(task.id) ? task : remapAgentTaskReferencesAfterDeletion(task, latestConversation, nextConversation)),
         agentConversations,
         agentInputDrafts,
-        ...(latest.activeAgentConversationId === conversationId && latest.appMode === 'agent'
-          ? { prompt: remapAgentRoundMentionsForPathChange(latest.prompt, oldActivePath, newActivePath) }
-          : {}),
-        agentEditingRoundId: latest.agentEditingRoundId === roundId ? null : latest.agentEditingRoundId,
+        ...(latest.activeAgentConversationId === conversationId && latest.appMode === 'agent' ? visibleDraft : {}),
+        agentEditingRoundId: nextEditId,
       }
     })
   } catch (err) {
@@ -4407,17 +4441,12 @@ async function deleteAgentAssistantMessageAndTasks(conversationId: string, messa
   const message = conversation?.messages.find((item) => item.id === messageId && item.role === 'assistant')
   if (!conversation || !message) return 'not-found'
 
-  const round = conversation.rounds.find((item) => item.id === message.roundId)
-  const taskIds = new Set(uniqueIds([
-    ...(message.outputTaskIds ?? []),
-    ...(round ? getAgentRoundDeletionTaskIds(conversation, round, state.tasks) : []),
-    ...state.tasks.filter((task) => task.agentMessageId === messageId).map((task) => task.id),
-  ]))
+  const taskIds = getAgentRoundDeletionTaskIds(conversation, new Set([message.roundId]), state.tasks, state.agentConversations)
   const referencedRoundIds = new Set([
     message.roundId,
     ...conversation.rounds.filter((item) => item.assistantMessageId === messageId).map((item) => item.id),
   ])
-  if (hasRunningAgentDeletionWork(conversationId, referencedRoundIds, taskIds, state)) return 'running'
+  if (hasRunningAgentDeletionWork(conversation, referencedRoundIds, taskIds, state)) return 'running'
 
   let deleted = false
   try {
@@ -4428,14 +4457,45 @@ async function deleteAgentAssistantMessageAndTasks(conversationId: string, messa
 
       const now = Date.now()
       const assistantMessageIds = new Set([messageId])
-      const agentConversations = latest.agentConversations.map((item) => {
-        const candidate = item.id === conversationId
-          ? { ...item, messages: item.messages.filter((current) => current.id !== messageId), updatedAt: now }
-          : item
-        return cleanDeletedAgentReferences(candidate, deletedTaskIds, assistantMessageIds, now)
-      })
+      const owner = latestConversation.rounds.find((item) => item.id === latestMessage.roundId)
+      const replies = owner ? getAgentSiblingRounds(latestConversation, owner, 'assistant') : []
+      const removeLeaf = owner && replies.length > 1 && !latestConversation.rounds.some((item) => item.parentRoundId === owner.id)
+      let nextConversation = {
+        ...latestConversation,
+        messages: latestConversation.messages.filter((item) => item.id !== messageId),
+        updatedAt: now,
+      }
+      if (owner && removeLeaf) {
+        const index = replies.findIndex((item) => item.id === owner.id)
+        const nextReply = replies[index - 1] ?? replies[index + 1]
+        nextConversation = {
+          ...nextConversation,
+          rounds: nextConversation.rounds.filter((item) => item.id !== owner.id),
+          messages: nextConversation.messages.filter((item) => item.roundId !== owner.id),
+          ...(nextConversation.visitedRoundIds ? { visitedRoundIds: nextConversation.visitedRoundIds.filter((id) => id !== owner.id) } : {}),
+          activeRoundId: latestConversation.activeRoundId === owner.id
+            ? getAgentBranchLeafId(nextConversation, nextReply.id)
+            : latestConversation.activeRoundId,
+        }
+      } else if (owner) {
+        nextConversation.rounds = nextConversation.rounds.map((item) => item.id === owner.id
+          ? { ...setAgentRoundOutputTaskIds(item, []), assistantMessageId: undefined, responseId: undefined, responseOutput: undefined, status: 'done', error: null }
+          : item)
+      }
+      const agentConversations = latest.agentConversations.map((item) =>
+        cleanDeletedAgentReferences(item.id === conversationId ? nextConversation : item, deletedTaskIds, item.id === conversationId ? assistantMessageIds : null, now),
+      )
+      const agentInputDrafts = reconcileAgentDraftsAfterDeletion(latest.agentInputDrafts, latestConversation, nextConversation)
+      const editRemoved = latest.activeAgentConversationId === conversationId && removeLeaf && latest.agentEditingRoundId === owner.id
       deleted = true
-      return { agentConversations }
+      return {
+        agentConversations,
+        agentInputDrafts,
+        ...(latest.activeAgentConversationId === conversationId && latest.appMode === 'agent' &&
+          (editRemoved || (!latest.agentEditingRoundId && nextConversation.activeRoundId !== latestConversation.activeRoundId))
+          ? restoreAgentInputDraftState(agentInputDrafts, conversationId) : {}),
+        agentEditingRoundId: editRemoved ? null : latest.agentEditingRoundId,
+      }
     })
   } catch (err) {
     if (!deleted) throw err
@@ -4465,8 +4525,15 @@ export async function removeTaskOutput(taskId: string, output: { imageId: string
     if (actualParamsByImage) delete actualParamsByImage[imageId]
     if (revisedPromptByImage) delete revisedPromptByImage[imageId]
   }
+  // 失败槽位没有生成图片，不占历史图号
+  const agentOutput = task.agentConversationId || useStore.getState().agentConversations.some((conversation) =>
+    conversation.rounds.some((round) => round.outputTaskIds.includes(taskId)))
+  const historySlots = agentOutput && index >= 0 ? getAgentTaskImageSlots(task) : []
+  let liveIndex = 0
+  const removedIndex = historySlots.findIndex((id) => id !== null && liveIndex++ === index)
   const updated: TaskRecord = {
     ...task,
+    ...(removedIndex >= 0 ? { removedOutputImageIndices: historySlots.flatMap((id, i) => id === null || i === removedIndex ? [i] : []) } : {}),
     outputImages,
     transparentOriginalImages: task.transparentOriginalImages?.filter((_, idx) => idx !== index),
     actualParamsByImage,
@@ -4525,22 +4592,26 @@ async function removeTasks(taskIds: string[], updateState?: TaskDeletionStateUpd
   }
 
   const cleanup = scrubAgentOutputPayloadsForDeletedTasks(deletedTasks)
-  const domainUpdatedConversations: AgentConversation[] = []
+  const updatedTasks = new Map(cleanup.updatedTasks.map((task) => [task.id, task]))
+  const updatedConversations = new Map(cleanup.updatedConversations.map((conversation) => [conversation.id, conversation]))
   if (updateState) {
     useStore.setState((state) => {
       const patch = updateState(state, toDelete)
       if (!patch) return state
+      patch.tasks?.forEach((task, index) => {
+        if (task !== state.tasks[index]) updatedTasks.set(task.id, task)
+      })
       if (patch.agentConversations) {
         const previousById = new Map(state.agentConversations.map((conversation) => [conversation.id, conversation]))
-        domainUpdatedConversations.push(...patch.agentConversations.filter((conversation) => previousById.get(conversation.id) !== conversation))
+        for (const conversation of patch.agentConversations) {
+          if (conversation !== previousById.get(conversation.id)) updatedConversations.set(conversation.id, conversation)
+        }
       }
       return patch
     })
   }
-  const updatedConversations = new Map(cleanup.updatedConversations.map((conversation) => [conversation.id, conversation]))
-  for (const conversation of domainUpdatedConversations) updatedConversations.set(conversation.id, conversation)
   await persistTaskDeletionCleanup(deletedTasks.map((task) => task.id), {
-    ...cleanup,
+    updatedTasks: [...updatedTasks.values()],
     updatedConversations: [...updatedConversations.values()],
   })
   await deleteUnreferencedImageIds(deletedImageIds)
@@ -4955,12 +5026,22 @@ export async function importData(input: File | File[], options: ImportOptions = 
         .filter((conversation) => !isEmptyAgentConversation(conversation))
       useStore.setState((state) => {
         const agentConversations = mergeImportedAgentConversations(state.agentConversations, normalizedAgentConversations)
-        const activeAgentConversationId = state.activeAgentConversationId && agentConversations.some((conversation) => conversation.id === state.activeAgentConversationId)
+        const visible = agentConversations.filter((item) => !isPrivacyHiddenConversation(state.privacyMode, item))
+        const visibleIds = new Set(visible.map((item) => item.id))
+        const activeAgentConversationId = state.activeAgentConversationId && visibleIds.has(state.activeAgentConversationId)
           ? state.activeAgentConversationId
-          : normalizedAgentConversations[0]?.id ?? agentConversations[0]?.id ?? null
+          : normalizedAgentConversations.find((item) => visibleIds.has(item.id))?.id ?? visible[0]?.id ?? null
+        const privacy = state.privacyMode
         return {
           agentConversations,
           activeAgentConversationId,
+          ...restoreAgentDraftsAfterImport(state, state.agentConversations, normalizedAgentConversations, activeAgentConversationId),
+          ...(privacy ? {
+            privacyMode: { ...privacy, inputSnapshot: {
+              ...privacy.inputSnapshot,
+              ...restoreAgentDraftsAfterImport(privacy.inputSnapshot, state.agentConversations, normalizedAgentConversations, privacy.inputSnapshot.activeAgentConversationId),
+            } },
+          } : {}),
         }
       })
       await replaceStoredAgentConversations(useStore.getState().agentConversations)

@@ -79,6 +79,21 @@ describe('agent input builder', () => {
     }])
   })
 
+  it('continues a branch with a deleted reply using only its remaining messages', async () => {
+    const first = round('round-1', 1, {
+      responseOutput: [{ type: 'message', content: [{ type: 'output_text', text: '旧版残留的已删除回复' }] }],
+    })
+    const followup = round('round-2', 2)
+    const input = await buildAgentApiInput({
+      conversation: conversation([first, followup], [message(first, '原始输入'), message(followup, '追问')]),
+      currentRound: followup, tasks: [], loadImage: noImage,
+    })
+    expect(input).toEqual([
+      { role: 'user', content: [{ type: 'input_text', text: '原始输入' }] },
+      { role: 'user', content: [{ type: 'input_text', text: '追问' }] },
+    ])
+  })
+
   it('uses only the current branch path', async () => {
     const first = round('round-1', 1, { assistantMessageId: 'assistant-1' })
     const branchA = round('round-2-a', 2, { parentRoundId: first.id, assistantMessageId: 'assistant-2-a' })
@@ -133,19 +148,46 @@ describe('agent input builder', () => {
     expect(loadImage).toHaveBeenCalledTimes(2)
   })
 
-  it('keeps declared references when an input image is missing', async () => {
-    const currentRound = round('round-1', 1, { inputImageIds: ['missing-image'], status: 'running', finishedAt: null })
-
+  it('advertises only loaded inputs while preserving their original slot numbers', async () => {
+    const currentRound = round('round-1', 1, { inputImageIds: ['missing', 'live'] })
+    const prompt = `参考 ${getSelectedImageMentionLabel(0)} 和 ${getSelectedImageMentionLabel(1)}`
+    const next = round('next', 2, { parentRoundId: currentRound.id })
     const input = await buildAgentApiInput({
-      conversation: conversation([currentRound], [message(currentRound, '继续')]),
-      currentRound,
+      conversation: conversation([currentRound, next], [message(currentRound, prompt), message(next, '继续')]),
+      currentRound: next,
       tasks: [],
-      loadImage: noImage,
+      loadImage: async (id) => id === 'live' ? 'data:live' : null,
     })
-    const serialized = JSON.stringify(input)
 
-    expect(serialized).toContain('<ref id=\\"round-1-reference-1\\" />')
-    expect(serialized).not.toContain('input_image')
+    expect(input[0]).toEqual({ role: 'user', content: [
+      { type: 'input_text', text: '参考 <removed_ref id="round-1-reference-1" /> 和 <ref id="round-1-reference-2" />\n\n<available_refs>\n  <ref id="round-1-reference-2" />\n</available_refs>' },
+      { type: 'input_image', image_url: 'data:live' },
+    ] })
+    await expect(buildAgentApiInput({
+      conversation: conversation([currentRound], [message(currentRound, prompt)]),
+      currentRound, tasks: [], loadImage: async (id) => id === 'live' ? 'data:live' : null,
+    })).rejects.toThrow('第 1 张输入图片已不存在')
+  })
+
+  it('marks missing output images in history and advertises only live continuation slots', async () => {
+    const first = round('first', 1, { outputTaskIds: ['batch'] })
+    const next = round('next', 2, { parentRoundId: first.id })
+    const loadImage = async (id: string) => id === 'live' ? 'data:live' : null
+    const tasks = [task('batch', { outputImages: ['missing', 'live'] })]
+    const input = await buildAgentApiInput({
+      conversation: conversation([first, next], [message(first, '生成'), message(next, '参考 @第1轮图1')]),
+      currentRound: next, tasks, loadImage,
+    })
+    expect(input).toContainEqual({ role: 'user', content: [{ type: 'input_text', text: '参考 <removed_ref id="round-1-image-1" />' }] })
+    const continued = await buildAgentContinuationInput({
+      baseInput: [], currentRound: first, tasks, currentRoundOutput: [], batchTaskIds: ['batch'], toolCallsUsed: 1, maxToolCalls: 3, loadImage,
+    })
+    expect(continued[0]).toMatchObject({ content: [
+      { type: 'input_text', text: '<removed_ref id="round-1-image-1" />' },
+      { type: 'input_image', image_url: 'data:live' },
+      { type: 'input_text', text: expect.stringContaining('<ref id="round-1-image-2"') },
+    ] })
+    expect(continued[1]).toMatchObject({ content: [{ text: expect.stringContaining('prompts: <ref id="round-1-image-2" />\n') }] })
   })
 
   it('propagates image loading failures', async () => {
@@ -300,6 +342,18 @@ describe('agent input builder', () => {
       },
       { role: 'user', content: [{ type: 'input_text', text: '继续' }] },
     ])
+  })
+
+  it('uses the local replay prompt for a shared generated image', async () => {
+    const shared = task('shared', { prompt: '全局提示词', outputImages: ['image'] })
+    const owner = round('owner', 1, { outputTaskIds: ['shared'], outputTaskPrompts: { shared: '分支内提示词' } })
+    const next = round('next', 2, { parentRoundId: owner.id })
+    const input = await buildAgentApiInput({
+      conversation: conversation([owner, next], [message(owner, '生成'), message(next, '继续')]),
+      currentRound: next, tasks: [shared], loadImage: async () => 'data:image',
+    })
+    expect(JSON.stringify(input)).toContain('分支内提示词')
+    expect(JSON.stringify(input)).not.toContain('全局提示词')
   })
 
   it('builds the exact active-path continuation with historical and batch images', async () => {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from 'react'
-import { removeMultipleTasks, useStore } from '../store'
+import { useStore } from '../store'
 import type { AgentConversation } from '../types'
 import { getAgentConversationTaskIds, getConversationSearchText } from '../lib/agentConversationState'
 import { useTooltip } from '../hooks/useTooltip'
@@ -158,7 +158,7 @@ export default function HistoryModal({ onClose, ignoreOutsideClickRef }: History
   const handleDelete = (e: React.MouseEvent, id: string) => {
     e.stopPropagation()
     const targetConversation = conversations.find((item) => item.id === id) ?? null
-    const relatedTaskIds = getAgentConversationTaskIds(targetConversation, tasks)
+    const relatedTaskIds = getAgentConversationTaskIds(targetConversation, tasks, useStore.getState().agentConversations)
     const relatedTaskIdSet = new Set(relatedTaskIds)
     const generatedImageCount = new Set(
       tasks
@@ -177,9 +177,9 @@ export default function HistoryModal({ onClose, ignoreOutsideClickRef }: History
             tone: 'danger',
           }
         : undefined,
+      awaitAction: true,
       action: async (deleteGeneratedImages = false) => {
-        if (deleteGeneratedImages && relatedTaskIds.length > 0) await removeMultipleTasks(relatedTaskIds)
-        deleteConversation(id)
+        await deleteConversation(id, deleteGeneratedImages)
         if (conversations.length <= 1) {
           onClose()
         }

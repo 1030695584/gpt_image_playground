@@ -121,9 +121,10 @@ export default function AgentSettingsTab({
           )}
         </>
       )}
-      <label className="block">
+      <div className="block">
         <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">最大工具调用轮数</span>
         <input
+          aria-label="最大工具调用轮数"
           value={agentMaxToolRoundsInput}
           onChange={(e) => setAgentMaxToolRoundsInput(e.target.value)}
           onBlur={commitAgentMaxToolRounds}
@@ -135,7 +136,7 @@ export default function AgentSettingsTab({
         <div data-selectable-text className="mt-1.5 text-xs leading-relaxed text-gray-500 dark:text-gray-500">
           默认 15。用于限制 Agent 连续调用工具时的最大轮数，防止无限循环。
         </div>
-      </label>
+      </div>
       <div className="block">
         <div className="mb-1 flex items-center justify-between gap-3">
           <span className="block text-sm text-gray-600 dark:text-gray-300">网络搜索</span>

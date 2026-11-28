@@ -16,7 +16,6 @@ import {
   getAgentImageApiProfile,
   getCustomProviderDefinition,
   findEquivalentApiProfile,
-  importCustomProviderDefinitionFromJson,
   importCustomProviderSettingsFromJson,
   getDefaultApiProfileId,
   mergePresetImportedSettings as mergeDefaultImportedSettings,
@@ -28,7 +27,7 @@ import {
   switchApiProfileProvider,
   validateApiProfile,
 } from './apiProfiles'
-import { CUSTOM_PROVIDER_LLM_PROMPT, DEFAULT_CUSTOM_PROVIDER_JSON } from './settingsCustomProvider'
+import { CUSTOM_PROVIDER_LLM_PROMPT, DEFAULT_CUSTOM_PROVIDER_JSON, serializeCustomProviderManifest } from './settingsCustomProvider'
 
 const platform = vi.hoisted(() => ({ isTauri: false }))
 vi.mock('./platform', () => platform)
@@ -1448,7 +1447,7 @@ describe('custom providers', () => {
   })
 
   it('normalizes an Apimart-style task manifest', () => {
-    const provider = importCustomProviderDefinitionFromJson(JSON.stringify({
+    const [provider] = importCustomProviderSettingsFromJson(JSON.stringify({
       name: 'Apimart GPT-Image-2',
       template: 'http-image',
       submit: {
@@ -1476,7 +1475,7 @@ describe('custom providers', () => {
           imageUrlPaths: ['data.result.images.*.url.*'],
         },
       },
-    }))
+    })).customProviders
 
     expect(provider).toMatchObject({
       template: 'http-image',
@@ -1561,11 +1560,11 @@ describe('custom providers', () => {
   })
 
   it('does not inherit fal URL and model when switching to a custom provider', () => {
-    const provider = importCustomProviderDefinitionFromJson(JSON.stringify({
+    const [provider] = importCustomProviderSettingsFromJson(JSON.stringify({
       name: 'Custom Provider',
       template: 'http-image',
       submit: { path: 'images/generations' },
-    }))
+    })).customProviders
     const profile = switchApiProfileProvider(createDefaultFalProfile(), provider.id, provider)
 
     expect(profile.provider).toBe(provider.id)
@@ -1575,7 +1574,7 @@ describe('custom providers', () => {
   })
 
   it('rejects task mappings without poll configuration', () => {
-    expect(() => importCustomProviderDefinitionFromJson(JSON.stringify({
+    expect(() => importCustomProviderSettingsFromJson(JSON.stringify({
       name: 'Invalid Async',
       submit: {
         path: 'images/generations',
@@ -1585,10 +1584,10 @@ describe('custom providers', () => {
   })
 
   it('restores custom provider draft settings', () => {
-    const provider = importCustomProviderDefinitionFromJson(JSON.stringify({
+    const [provider] = importCustomProviderSettingsFromJson(JSON.stringify({
       name: 'Custom Provider',
       submit: { path: 'images/generations' },
-    }))
+    })).customProviders
     const customProfile = switchApiProfileProvider(createDefaultOpenAIProfile(), provider.id, provider)
     const openAIProfile = switchApiProfileProvider({ ...customProfile, codexCli: true, transparentBackgroundMethod: 'local' }, 'openai')
     const restoredProfile = switchApiProfileProvider(openAIProfile, provider.id, provider)
@@ -1904,4 +1903,17 @@ it('initializes additional default URL configuration fields', async () => {
   for (const profile of [mod.createDefaultOpenAIProfile(), mod.DEFAULT_SETTINGS.profiles[0]]) {
     expect(profile).toMatchObject({ svgModel: 'svg-author', svgReasoningEffort: 'high', responseFormatB64Json: false, timeout: 120 })
   }
+})
+
+it('编辑或粘贴单份 Manifest 后再保存会保留尺寸和模型覆盖', () => {
+  const manifest = {
+    id: 'custom-example', name: '示例', submit: { path: 'generate' },
+    imageSize: { mode: 'aspect-ratio', ratios: ['1:1'], resolutions: ['2K'] },
+    modelOverrides: [{ models: ['example-*'], submit: { path: 'other' } }],
+  }
+  const [provider] = importCustomProviderSettingsFromJson(JSON.stringify(manifest)).customProviders
+  const draft = JSON.parse(serializeCustomProviderManifest(provider))
+  const modelList = { path: 'models', listPath: 'data', idPath: 'id' }
+  const [saved] = importCustomProviderSettingsFromJson(JSON.stringify({ ...draft, id: provider.id, modelList })).customProviders
+  expect(saved).toEqual({ ...provider, modelList })
 })

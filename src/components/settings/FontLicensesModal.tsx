@@ -1,13 +1,13 @@
-import { useEffect, useState, type RefObject } from 'react'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useDialogLayer } from '../../hooks/useDialogLayer'
 import { CloseIcon } from '../icons'
 
 interface FontLicensesModalProps {
-  scrollBoundaryRef: RefObject<HTMLDivElement | null>
   onClose: () => void
 }
 
-export default function FontLicensesModal({ scrollBoundaryRef, onClose }: FontLicensesModalProps) {
+export default function FontLicensesModal({ onClose }: FontLicensesModalProps) {
   const [text, setText] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
 
@@ -21,15 +21,16 @@ export default function FontLicensesModal({ scrollBoundaryRef, onClose }: FontLi
       })
   }, [])
 
+  const layer = useDialogLayer(onClose)
   return createPortal(
     <div
       data-no-drag-select
-      className="fixed inset-0 z-[110] flex items-center justify-center p-4"
+      className="fixed inset-0 flex items-center justify-center p-4"
       onClick={onClose}
     >
       <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md animate-overlay-in" />
       <div
-        className="relative z-10 w-full max-w-2xl rounded-3xl bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] ring-1 ring-black/5 dark:ring-white/10 animate-confirm-in flex flex-col max-h-[85vh] sm:max-h-[90vh]"
+        className="relative z-10 w-full max-w-2xl overflow-hidden rounded-3xl bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] ring-1 ring-black/5 dark:ring-white/10 animate-confirm-in flex flex-col max-h-[85vh] sm:max-h-[90vh]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="shrink-0 p-6 pb-2">
@@ -46,7 +47,7 @@ export default function FontLicensesModal({ scrollBoundaryRef, onClose }: FontLi
           </div>
         </div>
 
-        <div ref={scrollBoundaryRef} className="flex-1 overflow-y-auto px-6 pb-6 pt-2 custom-scrollbar min-h-0">
+        <div className="flex-1 overflow-y-auto px-6 pb-6 pt-2 custom-scrollbar min-h-0">
           {text === null ? (
             <div className="py-8 text-center text-sm text-gray-500 dark:text-gray-400">{failed ? '许可清单加载失败，请刷新页面后重试' : '正在加载…'}</div>
           ) : (
@@ -60,6 +61,6 @@ export default function FontLicensesModal({ scrollBoundaryRef, onClose }: FontLi
         </div>
       </div>
     </div>,
-    document.body,
+    layer,
   )
 }
