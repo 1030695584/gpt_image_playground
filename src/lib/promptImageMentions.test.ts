@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { InputImage } from '../types'
-import { expandImageCommentMentions, getAtImageQuery, getImageCommentMention, getImageComments, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getTaskPromptText, getSelectedTextMentionLabel, insertImageMention, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, remapImageMentionsForOrder, replaceImageMentionsForApi, stripImageMentionMarkers, upsertImageCommentMention } from './promptImageMentions'
+import { expandImageCommentMentions, getAtImageQuery, getImageCommentMention, getImageComments, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getTaskPromptText, getSelectedTextMentionLabel, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, remapImageMentionsForOrder, replaceImageMentionsForApi, stripImageMentionMarkers, upsertImageCommentMention } from './promptImageMentions'
 
 const images: InputImage[] = [
   { id: 'image-a', dataUrl: 'data:image/png;base64,a' },
@@ -25,14 +25,14 @@ describe('prompt image mentions', () => {
   })
 
   it('replaces middle-text @ query with selected current reference image mention', () => {
-    expect(insertImageMention('参考@生成', 2, 3, 1)).toEqual({
+    expect(insertImageMentionAtVisibleRange('参考@生成', 2, 3, 1)).toEqual({
       prompt: `参考${getSelectedImageMentionLabel(1)}生成`,
       cursor: 5,
     })
   })
 
   it('does not add extra spaces around line breaks when inserting mentions', () => {
-    expect(insertImageMention('参考\n@\n生成', 3, 4, 0)).toEqual({
+    expect(insertImageMentionAtVisibleRange('参考\n@\n生成', 3, 4, 0)).toEqual({
       prompt: `参考\n${getSelectedImageMentionLabel(0)}\n生成`,
       cursor: 6,
     })

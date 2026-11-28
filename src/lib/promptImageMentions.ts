@@ -76,16 +76,6 @@ export function imageMentionMatches(query: string, index: number) {
   return oneBasedIndex.includes(normalized) || label.toLowerCase().includes(normalized)
 }
 
-export function insertImageMention(prompt: string, start: number, cursor: number, imageIndex: number) {
-  const mention = getSelectedImageMentionLabel(imageIndex)
-  const visibleMention = getImageMentionLabel(imageIndex)
-  const nextPrompt = `${prompt.slice(0, start)}${mention}${prompt.slice(cursor)}`
-  return {
-    prompt: nextPrompt,
-    cursor: start + visibleMention.length,
-  }
-}
-
 export function insertImageMentionAtVisibleRange(prompt: string, start: number, cursor: number, imageIndex: number) {
   return insertTextMentionAtVisibleRange(prompt, start, cursor, getImageMentionLabel(imageIndex))
 }

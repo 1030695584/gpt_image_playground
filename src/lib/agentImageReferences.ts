@@ -37,20 +37,6 @@ export function extractAgentReferenceIds(text: string) {
   return Array.from(text.matchAll(AGENT_REF_TAG_RE), (match) => match[2]).filter((id): id is string => Boolean(id))
 }
 
-export function resolveAgentPromptImageReferences(prompt: string, rounds: AgentRound[], tasks: TaskRecord[]) {
-  const refs: string[] = []
-  for (const match of prompt.matchAll(AGENT_ROUND_IMAGE_REFERENCE_RE)) {
-    const roundIndex = Number(match[1]) - 1
-    const imageIndex = Number(match[2]) - 1
-    const round = rounds[roundIndex]
-    if (!round || imageIndex < 0) continue
-
-    const imageId = collectAgentRoundOutputImageSlots(round, tasks)[imageIndex]
-    if (imageId) refs.push(imageId)
-  }
-  return refs
-}
-
 export function replaceAgentPromptImageReferencesForApi(
   prompt: string,
   currentRound: AgentRound,

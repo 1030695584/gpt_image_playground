@@ -978,11 +978,6 @@ export function importCustomProviderSettingsFromJson(
   throw new Error('无法识别该 JSON。请粘贴自定义服务商配置。')
 }
 
-export function importCustomProviderDefinitionFromJson(jsonText: string, existingProviders: CustomProviderDefinition[] = []): CustomProviderDefinition {
-  const result = importCustomProviderSettingsFromJson(jsonText, existingProviders)
-  return result.customProviders[0]
-}
-
 /** 拆分模型列表，兼容中英文逗号并去重 */
 export function splitModelList(value: string) {
   return Array.from(new Set(value.split(/[,，]/).map((item) => item.trim()).filter(Boolean)))
